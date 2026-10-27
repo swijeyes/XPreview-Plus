@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=XPreview+
+Comment=View PDF, images, RTF and OpenDocument text
+Exec=XPreview+ %F
+Terminal=false
+Categories=Office;Viewer;Graphics;
+MimeType=application/pdf;image/png;image/jpeg;image/gif;image/webp;image/tiff;image/bmp;image/svg+xml;application/rtf;text/rtf;application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.text-template;application/vnd.oasis.opendocument.text-flat-xml;

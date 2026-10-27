@@ -1,0 +1,647 @@
+% SPDX-License-Identifier: AGPL-3.0-or-later
+% Copyright (C) 2026 Sanjeeva Wijeyesakere
+%
+% XPreview+ User Manual.
+% Build:  tectonic xpreview-plus-manual.tex      (or: latexmk -xelatex / -pdf)
+\documentclass[11pt,a4paper]{article}
+
+% ---------------------------------------------------------------- engine/fonts
+\usepackage{iftex}
+\ifXeTeX
+  \usepackage{fontspec}
+  \setmainfont{texgyrepagella}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+                               ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+  \setsansfont{texgyreheros}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+                             ItalicFont=*-italic, BoldItalicFont=*-bolditalic, Scale=0.92]
+  \setmonofont{texgyrecursor}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold, Scale=0.95]
+\else
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{tgpagella}
+  \usepackage[scale=0.92]{tgheros}
+  \usepackage{tgcursor}
+\fi
+
+% ---------------------------------------------------------------- packages
+\usepackage[margin=2.4cm,headheight=14pt]{geometry}
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\usepackage{booktabs,tabularx,longtable,array}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+\usepackage[section]{placeins}  % keep figures inside their section
+\usepackage[hidelinks]{hyperref}
+\usepackage{bookmark}
+
+\definecolor{brand}{HTML}{1F5FBF}
+\definecolor{brandlight}{HTML}{E8F0FB}
+\definecolor{notebg}{HTML}{FFF6D6}
+\definecolor{noteframe}{HTML}{E2C766}
+\definecolor{keybg}{HTML}{F4F4F6}
+\definecolor{keyframe}{HTML}{B9BBC2}
+\definecolor{rule}{HTML}{C9CED8}
+
+\hypersetup{colorlinks=true, linkcolor=brand, urlcolor=brand,
+  pdftitle={XPreview+ User Manual}, pdfauthor={Sanjeeva Wijeyesakere},
+  pdfsubject={User manual for XPreview+ 1.0}}
+
+\setlist{itemsep=2pt, topsep=4pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\arraystretch}{1.25}
+
+\titleformat{\section}{\Large\sffamily\bfseries\color{brand}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\sffamily\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\sffamily\bfseries}{}{0em}{}
+\titlespacing*{\section}{0pt}{18pt}{8pt}
+\titlespacing*{\subsection}{0pt}{12pt}{4pt}
+\titlespacing*{\subsubsection}{0pt}{10pt}{2pt}
+\setcounter{tocdepth}{2}
+\usepackage{tocloft}  % compact table of contents (fits one page)
+\setlength{\cftbeforesecskip}{3.5pt}
+\renewcommand{\cftsecfont}{\sffamily\bfseries}
+\renewcommand{\cftsecpagefont}{\sffamily\bfseries}
+\setlength{\cftbeforetoctitleskip}{0pt}
+\renewcommand{\cfttoctitlefont}{\Large\sffamily\bfseries\color{brand}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily XPreview+ 1.0 User Manual}
+\fancyhead[R]{\small\sffamily\nouppercase{\leftmark}}
+\fancyfoot[C]{\small\sffamily\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+
+% ---------------------------------------------------------------- macros
+\newcommand{\app}{XPreview+}
+% Keyboard key cap, e.g. \key{Cmd}+\key{O}
+\newcommand{\key}[1]{{\setlength{\fboxsep}{1.4pt}\setlength{\fboxrule}{0.5pt}%
+  \raisebox{-0.1ex}{\fcolorbox{keyframe}{keybg}{\footnotesize\sffamily\strut #1}}}}
+% Menu path, e.g. \menu{File > Export as PDF...}
+\newcommand{\menu}[1]{\textsf{\textbf{#1}}}
+\newcommand{\ui}[1]{\textsf{#1}}
+\newcommand{\file}[1]{\texttt{#1}}
+
+\newtcolorbox{note}[1][Note]{enhanced, breakable, colback=notebg, colframe=noteframe,
+  boxrule=0.5pt, arc=2pt, left=6pt, right=6pt, top=4pt, bottom=4pt,
+  fonttitle=\sffamily\bfseries\small, coltitle=black, attach title to upper={\ }, title={#1:}}
+\newtcolorbox{tip}{enhanced, breakable, colback=brandlight, colframe=brand!45, boxrule=0.5pt,
+  arc=2pt, left=6pt, right=6pt, top=4pt, bottom=4pt,
+  fonttitle=\sffamily\bfseries\small, coltitle=black, attach title to upper={\ }, title={Tip:}}
+
+\newcommand{\screenshot}[3]{% file, width, caption
+  \begin{figure}[htbp]\centering
+    % The frame adds 2*(\fboxsep+\fboxrule); keep the total within #2.
+    \fcolorbox{rule}{white}{\includegraphics[width=\dimexpr#2-2\fboxsep-2\fboxrule\relax]{figures/#1}}
+    \caption{#3}\label{fig:#1}
+  \end{figure}}
+
+\begin{document}
+
+% ================================================================ title page
+\begin{titlepage}
+  \centering
+  \vspace*{2.5cm}
+  \includegraphics[width=4.2cm]{figures/icon.png}\par
+  \vspace{1.2cm}
+  {\sffamily\bfseries\fontsize{38}{44}\selectfont \app\par}
+  \vspace{0.4cm}
+  {\sffamily\Large User Manual\par}
+  \vspace{0.3cm}
+  {\sffamily\large Version 1.0\par}
+  \vspace{1.6cm}
+  {\large A fast viewer for PDF documents, images, RTF and OpenDocument text,\\
+  with export of anything to PDF.\par}
+  \vfill
+  {\sffamily macOS \quad·\quad Windows \quad·\quad Linux\par}
+  \vspace{0.6cm}
+  {\small Copyright \textcopyright{} 2026 Sanjeeva Wijeyesakere.\\
+  \app{} is free software under the GNU Affero General Public License, version 3 or later.\\
+  \url{https://github.com/swijeyes/XPreview-Plus}\par}
+\end{titlepage}
+
+\tableofcontents
+\clearpage
+
+% ================================================================
+\section{Introduction}
+
+\app{} is a document and image viewer in the spirit of macOS Preview. It opens a
+file almost instantly, shows it page by page, lets you search, select and copy
+text, and can turn any file it opens into a PDF. It runs on macOS and Windows, and can be built for Linux.
+
+\subsection{What \app{} can open}
+\begin{itemize}
+  \item \textbf{PDF documents}, including password-protected ones.
+  \item \textbf{Images}: PNG, JPEG, GIF, WebP, TIFF (including multi-page TIFF), BMP,
+        SVG and more; HEIC on macOS. See Section~\ref{sec:formats} for the complete list.
+  \item \textbf{Rich Text Format} (\file{.rtf}) documents, such as those from TextEdit, WordPad or Word.
+  \item \textbf{OpenDocument Text} (\file{.odt}, \file{.ott}, \file{.fodt}) documents,
+        such as those from LibreOffice, Google Docs or Microsoft Word.
+\end{itemize}
+
+\subsection{Highlights}
+\begin{itemize}
+  \item \textbf{Page thumbnails} and a \textbf{table of contents} in the sidebar.
+  \item \textbf{Export as PDF} for every file type.
+  \item \textbf{Search} with highlighted results, \textbf{text selection} and \textbf{copy}.
+  \item Smooth \textbf{zooming} (including trackpad pinch), \textbf{fit to width or page}, and \textbf{rotation}.
+  \item \textbf{Tabs}, so several documents can be open in one window.
+  \item \textbf{Private and safe}: \app{} never connects to the internet on its own, never runs
+        macros or scripts, and treats every file as potentially hostile.
+\end{itemize}
+
+\screenshot{window-odt.png}{\linewidth}{\app{} showing an OpenDocument text file, with page
+thumbnails in the sidebar.}
+
+% ================================================================
+\section{Installing \app{}}
+
+\subsection{macOS}
+\textbf{Requirements:} a Mac with Apple silicon (M-series) and a recent version of macOS.
+
+\begin{enumerate}
+  \item Download \file{XPreviewPlus-1.0-macos-arm64.dmg} from the project's
+        \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
+  \item Double-click the downloaded file to open it.
+  \item Drag the \ui{\app} icon onto the \ui{Applications} folder shown next to it.
+  \item Eject the disk image (drag it to the Trash, or click the eject button in Finder).
+\end{enumerate}
+
+\subsubsection{Opening it the first time}
+If the copy you downloaded is not notarised by Apple, macOS blocks it the first time
+you open it and shows a message that it ``cannot verify'' the app. To allow it:
+\begin{enumerate}
+  \item Try to open \app{} once and close the warning.
+  \item Open \menu{System Settings > Privacy \& Security}.
+  \item Scroll down to the message about \app{} and click \ui{Open Anyway}.
+  \item Confirm with your password or Touch ID.
+\end{enumerate}
+You only need to do this once.
+
+\subsubsection{Removing \app{}}
+Drag \ui{\app} from \ui{Applications} to the Trash. To also remove its settings,
+see Section~\ref{sec:settings}.
+
+\subsection{Windows}
+\textbf{Requirements:} 64-bit Windows 10 or Windows 11.
+
+\app{} for Windows is \emph{portable}. There is no installer, and it never writes to the
+Windows registry.
+\begin{enumerate}
+  \item Download \file{XPreviewPlus-1.0-windows-x64-portable.zip} from the
+        \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
+  \item Right-click the zip file, choose \ui{Extract All\ldots}, and pick a folder,
+        for example your \file{Documents} folder or a USB stick.
+  \item Open the extracted \file{XPreview+} folder and double-click \file{XPreview+.exe}.
+\end{enumerate}
+
+If Microsoft Defender SmartScreen shows ``Windows protected your PC'', click
+\ui{More info} and then \ui{Run anyway}. This appears for new applications that are not yet
+widely downloaded.
+
+\begin{note}
+Keep all the files in the \file{XPreview+} folder together; the program needs them.
+Your settings are stored in a \file{settings} folder inside it. To remove \app{}, delete the folder.
+\end{note}
+
+\subsection{Linux}
+There is no ready-made Linux package yet. \app{} can be built from source; see
+the \file{README} in the project repository.
+
+\subsection{Checking your download (optional)}
+Each download on the Releases page has a matching \file{.sha256} file containing its
+checksum. To check a download, open a terminal in the folder where you saved both files and run
+\texttt{shasum -a 256 -c} followed by the name of the \file{.sha256} file (on Windows,
+\texttt{CertUtil -hashfile \textit{file} SHA256}), and compare.
+
+% ================================================================
+\section{The \app{} window}\label{sec:window}
+
+\screenshot{window-pdf.png}{\linewidth}{The main window with a four-page PDF. Thumbnails are on
+the left, the page view on the right, and the status bar along the bottom.}
+
+\subsection{Toolbar}
+From left to right:
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Sidebar button] Click to show or hide the sidebar. Click the small arrow next to it
+        to choose between \ui{Thumbnails} and \ui{Table of Contents}.
+  \item[Zoom out / Zoom in] Step the zoom down or up.
+  \item[Rotate left / Rotate right] Turn the pages a quarter turn.
+  \item[Export as PDF] Save the current document as a PDF (Section~\ref{sec:export}).
+  \item[Search field] Find text in the document (Section~\ref{sec:search}). The number of
+        results appears to its left.
+\end{description}
+
+\subsection{Sidebar}
+The sidebar shows either \textbf{page thumbnails} or the \textbf{table of contents}. Drag the
+thin divider between the sidebar and the page to make it wider or narrower; thumbnails grow
+and shrink with it.
+
+\subsection{Page view}
+The main area shows the pages of your document one after another on a grey background. Scroll to move
+through the document.
+
+\subsection{Status bar}
+The left side shows the current page, for example ``Page 2 of 9''. For single-page files it shows the file type instead.
+The right side has the \textbf{zoom box}. It shows the current zoom, and you can
+choose \ui{Fit Width}, \ui{Fit Page} or a percentage from it, or type a value such as
+\texttt{140\%} and press \key{Return}.
+
+\subsection{Information bar}
+For RTF and ODT documents that \app{} had to simplify, a yellow bar appears above the page
+(Section~\ref{sec:simplified}). Click the \ui{×} button on its right to dismiss it.
+
+\subsection{Tabs}
+Each file you open gets its own tab. The tab bar appears as soon as two or more files are open.
+Click a tab to switch, drag tabs to reorder them, and click a tab's close button
+(or press \key{Cmd}+\key{W}) to close it.
+
+% ================================================================
+\section{Opening files}
+
+There are several ways to open a file:
+\begin{itemize}
+  \item Choose \menu{File > Open\ldots} (\key{Cmd}+\key{O} on macOS, \key{Ctrl}+\key{O} on
+        Windows) and select one or more files.
+  \item \textbf{Drag} files onto the \app{} window.
+  \item On macOS, drag files onto the \app{} icon in the \textbf{Dock}.
+  \item In Finder, right-click a file and choose \menu{Open With > \app}.
+  \item Choose a recently opened file from \menu{File > Open Recent}. The list keeps the last
+        twelve files; \ui{Clear Menu} empties it.
+\end{itemize}
+
+If a file is already open, \app{} switches to its tab instead of opening it twice.
+
+\begin{tip}
+To have a type of file always open in \app{} on macOS, select such a file in Finder, choose
+\menu{File > Get Info}, pick \app{} under \ui{Open with}, and click \ui{Change All\ldots}.
+\end{tip}
+
+\subsection{Password-protected PDFs}
+When a PDF is encrypted, \app{} asks for its password. If you cancel, the tab shows a message
+instead of the document; close it and open the file again to retry.
+
+\subsection{How \app{} recognises files}
+\app{} looks at a file's \emph{contents}, not just its name, to decide what it is. If a file's
+extension is wrong (for example an RTF document named \file{report.pdf}), \app{} still opens it
+correctly and notes ``detected as \ldots'' in the status bar.
+
+\subsection{Files that cannot be opened}
+If a file is damaged, of an unsupported type, or too large to open safely, its tab shows a short explanation.
+OpenDocument spreadsheets (\file{.ods}) and presentations
+(\file{.odp}) are recognised but not supported in this version.
+
+% ================================================================
+\section{Viewing and navigating}
+
+\subsection{Moving through pages}
+\begin{itemize}
+  \item Scroll with the trackpad, mouse wheel or scroll bar.
+  \item Click a \textbf{thumbnail} to jump to that page. The highlighted thumbnail follows
+        the page you are reading.
+  \item Click an entry in the \textbf{table of contents}.
+  \item Use the \menu{Go} menu: \ui{Previous Page}, \ui{Next Page}, \ui{First Page},
+        \ui{Last Page} and \ui{Go to Page\ldots}.
+  \item On the keyboard: \key{Space} and \key{Shift}+\key{Space} move a screen down or up;
+        \key{Page Up}/\key{Page Down} and the arrow keys scroll; \key{Home} and \key{End} go to the
+        first and last page. When the page fits the window's width, \key{←} and \key{→} move to
+        the previous and next page.
+\end{itemize}
+
+\subsection{Table of contents}
+For PDFs, the table of contents comes from the document's bookmarks. For RTF and ODT
+documents, \app{} builds it from the headings. If a document has neither, the sidebar shows
+``No table of contents''.
+
+\subsection{Zooming}
+\begin{itemize}
+  \item Use the zoom buttons in the toolbar, or \menu{View > Zoom In} / \menu{Zoom Out}.
+  \item \menu{View > Actual Size} shows the page at 100\%.
+  \item \menu{View > Zoom to Fit} fits the whole page in the window; \menu{View > Fit Width}
+        fits the page width. Both keep fitting as you resize the window.
+  \item On a trackpad, \textbf{pinch} to zoom. Double-tap with two fingers to switch between fit
+        width and a closer view.
+  \item Hold \key{Cmd} (macOS) or \key{Ctrl} (Windows) and scroll to zoom around the pointer.
+  \item Use the zoom box in the status bar.
+\end{itemize}
+Zoom ranges from 5\% to 3200\%. Documents open fitted to the window's width. Images open
+fitted to the window, but are never enlarged beyond 100\%.
+
+\subsection{Rotating}
+\menu{Tools > Rotate Left} and \menu{Rotate Right} (\key{Cmd}+\key{L}, \key{Cmd}+\key{R}) turn
+all pages. Rotation only affects how the document is shown; the original file is never changed.
+Exported PDFs and printouts use the rotation you see.
+
+\subsection{Viewing images}
+\screenshot{window-image.png}{0.8\linewidth}{An SVG image. Images are a single page and are
+shown at their real size if they fit.}
+
+When an image is larger than the window, \textbf{drag} it to move it around. \textbf{Double-click}
+to switch between fitting the window and actual size. Multi-page TIFF files show
+one page per image. Animated GIF and WebP images show their first frame.
+
+% ================================================================
+\section{Searching}\label{sec:search}
+
+\begin{enumerate}
+  \item Click the search field in the toolbar, or press \key{Cmd}+\key{F} (\key{Ctrl}+\key{F}).
+  \item Type the text you are looking for and press \key{Return}.
+\end{enumerate}
+Every match is highlighted in yellow and the current one in orange. The counter next to the
+field shows, for example, ``3 of 12'', or ``Not found''.
+
+\begin{itemize}
+  \item Press \key{Return} again, or choose \menu{Edit > Find Next}, to go to the next match.
+  \item \key{Shift}+\key{Return} or \menu{Edit > Find Previous} goes back.
+  \item Searching ignores upper and lower case.
+  \item Clear the field (click its \ui{×}) to remove the highlights.
+\end{itemize}
+
+\begin{note}
+Images have no text to search. Scanned PDFs that contain only pictures of pages cannot be
+searched either, because \app{} does not perform text recognition (OCR).
+\end{note}
+
+% ================================================================
+\section{Selecting and copying}
+
+\subsection{Text}
+In PDF, RTF and ODT documents, drag across text to select it; the selection is shown in blue.
+Then choose \menu{Edit > Copy} (\key{Cmd}+\key{C}) to copy it. A selection covers text on one
+page at a time. Click anywhere or press \key{Esc} to clear it.
+
+\begin{tip}
+To move around a zoomed-in document instead of selecting text, hold \key{Option} (\key{Alt} on
+Windows) while you drag.
+\end{tip}
+
+\subsection{Images}
+When an image is open and nothing is selected, \menu{Edit > Copy} copies the image itself, ready to paste
+into another application.
+
+\subsection{Links}
+Click a link to follow it. Web and e-mail links (\texttt{http}, \texttt{https} and
+\texttt{mailto}) open in your browser or mail app. Links inside a PDF jump to the page they
+point to. The pointer turns into a hand over a link. For safety, other kinds of links are
+ignored, and nothing is ever opened without a click.
+
+% ================================================================
+\section{Exporting as PDF}\label{sec:export}
+
+Any file that \app{} can open can be saved as a PDF.
+\begin{enumerate}
+  \item Choose \menu{File > Export as PDF\ldots} (\key{Shift}+\key{Cmd}+\key{E}), or click the
+        export button in the toolbar.
+  \item Choose a name and location. \app{} suggests the original name with \file{.pdf}, in the same folder.
+  \item Click \ui{Save}.
+\end{enumerate}
+A progress window appears for longer documents, and the status bar confirms when the export
+is done.
+
+\subsection{What you get}
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[PDF documents] An exact copy of the original file. If you rotated the view,
+        the copy is saved with that rotation.
+  \item[RTF and ODT documents] Real PDF pages with sharp, selectable and searchable text, the
+        same layout you see in \app{}, and the fonts embedded.
+  \item[Images] A PDF page the size of the image, with the picture at full quality. SVG images
+        stay sharp at any zoom.
+\end{description}
+
+\begin{note}
+Exports are written safely: the new PDF only replaces an existing file once it has been
+written completely, so a failed or interrupted export never leaves a broken file behind.
+\end{note}
+
+% ================================================================
+\section{Printing}
+
+Choose \menu{File > Print\ldots} (\key{Cmd}+\key{P}). In the print dialog you can pick a printer
+and the range of pages. Each page is scaled to fit the paper and centred, using the current
+rotation.
+
+% ================================================================
+\section{Document information and the ``simplified view''}\label{sec:simplified}
+
+\subsection{The Inspector}
+\menu{Tools > Show Inspector} (\key{Cmd}+\key{I}) shows information about the open file: its type,
+the number of pages and details such as title, author and dates. For images it shows the
+dimensions and colour profile. It also lists anything that was shown in a simplified way.
+
+\subsection{Simplified view}
+RTF and ODT files are word-processor documents. \app{} contains its own renderer for them, so
+you do not need LibreOffice or Microsoft Word installed. It reproduces text, fonts, colours, lists,
+tables, images, headers and footers faithfully, but a few features are approximated. When
+that happens, a yellow bar says
+\emph{``Simplified view: some formatting may differ from the original.''} Its buttons are:
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Details\ldots] Lists exactly what was simplified, for example ``Footnotes are shown at
+        the end of the document'' or ``Font substituted: Calibri → Carlito''.
+  \item[Open in Default App] Opens the file in the application your computer normally uses for it.
+  \item[Export as PDF\ldots] Saves the document as you see it.
+\end{description}
+\menu{File > Open in Default App} is also available for any file.
+
+\subsection{Fonts}
+Documents often use fonts that are not installed on your computer. \app{} includes free fonts
+with the same letter widths as the common Microsoft fonts, so lines and pages break in the same
+places as in the original:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Font in the document} & \textbf{Shown with} \\
+\midrule
+Arial, Helvetica & Arimo \\
+Times New Roman, Times & Tinos \\
+Courier New, Courier & Cousine \\
+Calibri & Carlito \\
+Cambria & Caladea \\
+\bottomrule
+\end{tabular}
+\end{center}
+A font that is installed on your computer is always used as is.
+
+% ================================================================
+\section{Supported file types}\label{sec:formats}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{3.3cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{8.2cm}}
+\toprule
+\textbf{Type} & \textbf{Extensions} & \textbf{Notes} \\
+\midrule
+\endhead
+PDF & \file{.pdf} & Full support, including password-protected files, bookmarks and links. \\
+PNG, JPEG, BMP & \file{.png .jpg .jpeg .bmp} & Rotation stored in photos (EXIF) is applied automatically. \\
+GIF, WebP & \file{.gif .webp} & Animated images show their first frame. \\
+TIFF & \file{.tif .tiff} & Multi-page TIFF files show all pages. \\
+SVG & \file{.svg .svgz} & Vector images; stay sharp at every zoom. \\
+HEIC, JPEG 2000 & \file{.heic .heif .jp2} & macOS only. \\
+Other images & \file{.ico .icns .tga .wbmp} & \\
+Rich Text Format & \file{.rtf} & Fonts, colours, lists, tables, pictures (PNG, JPEG), links, headers, footers, footnotes. \\
+OpenDocument Text & \file{.odt .ott .fodt} & Styles, headings, lists, tables, images, links, headers, footers, page numbers, footnotes. \\
+OpenDocument Spreadsheet / Presentation & \file{.ods .odp} & Recognised, but not supported yet. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Known limitations of the RTF and ODT renderer}
+\begin{itemize}
+  \item Multiple text columns are shown as a single column.
+  \item Footnotes are collected at the end of the document rather than at the foot of each page.
+  \item Text boxes and frames are placed in the flow of the text, near where they are anchored.
+  \item Drawings made of shapes, embedded charts without a preview picture, and WMF/EMF pictures
+        (common in older RTF files) appear as labelled placeholders.
+  \item All pages use the page size of the document's first section.
+  \item Comments are hidden. Documents with tracked changes show the final text.
+\end{itemize}
+
+% ================================================================
+\section{Keyboard shortcuts}\label{sec:shortcuts}
+
+On macOS, \key{Cmd} is the Command key and \key{Option} is the Option (Alt) key.
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{4.6cm}}
+\toprule
+\textbf{Action} & \textbf{macOS} & \textbf{Windows / Linux} \\
+\midrule
+\endhead
+\multicolumn{3}{l}{\sffamily\bfseries File} \\
+Open & \key{Cmd}+\key{O} & \key{Ctrl}+\key{O} \\
+Close tab & \key{Cmd}+\key{W} & \key{Ctrl}+\key{W} \\
+Export as PDF & \key{Shift}+\key{Cmd}+\key{E} & \key{Ctrl}+\key{Shift}+\key{E} \\
+Print & \key{Cmd}+\key{P} & \key{Ctrl}+\key{P} \\
+Quit & \key{Cmd}+\key{Q} & \key{Ctrl}+\key{Q} on Linux; close the window on Windows \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries Edit} \\
+Copy & \key{Cmd}+\key{C} & \key{Ctrl}+\key{C} \\
+Find & \key{Cmd}+\key{F} & \key{Ctrl}+\key{F} \\
+Find next & \key{Cmd}+\key{G} & \key{F3} or \key{Ctrl}+\key{G} \\
+Find previous & \key{Shift}+\key{Cmd}+\key{G} & \key{Shift}+\key{F3} or \key{Ctrl}+\key{Shift}+\key{G} \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries View} \\
+Hide sidebar & \key{Option}+\key{Cmd}+\key{1} & \key{Ctrl}+\key{Alt}+\key{1} \\
+Thumbnails & \key{Option}+\key{Cmd}+\key{2} & \key{Ctrl}+\key{Alt}+\key{2} \\
+Table of contents & \key{Option}+\key{Cmd}+\key{3} & \key{Ctrl}+\key{Alt}+\key{3} \\
+Actual size & \key{Cmd}+\key{0} & \key{Ctrl}+\key{0} \\
+Zoom in & \key{Cmd}+\key{+} or \key{Cmd}+\key{=} & \key{Ctrl}+\key{+} \\
+Zoom out & \key{Cmd}+\key{-} & \key{Ctrl}+\key{-} \\
+Zoom to fit & \key{Cmd}+\key{9} & \key{Ctrl}+\key{9} \\
+Fit width & \key{Cmd}+\key{8} & \key{Ctrl}+\key{8} \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries Go} \\
+Previous / next page & \key{Option}+\key{Cmd}+\key{↑} / \key{↓} & \key{Ctrl}+\key{Alt}+\key{↑} / \key{↓} \\
+First / last page & \key{Cmd}+\key{↑} / \key{Cmd}+\key{↓} & \key{Ctrl}+\key{↑} / \key{Ctrl}+\key{↓} \\
+Go to page & \key{Option}+\key{Cmd}+\key{G} & \key{Ctrl}+\key{Alt}+\key{G} \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries Tools} \\
+Rotate left / right & \key{Cmd}+\key{L} / \key{Cmd}+\key{R} & \key{Ctrl}+\key{L} / \key{Ctrl}+\key{R} \\
+Show Inspector & \key{Cmd}+\key{I} & \key{Ctrl}+\key{I} \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries In the page view} \\
+Screen down / up & \key{Space} / \key{Shift}+\key{Space} & \key{Space} / \key{Shift}+\key{Space} \\
+First / last page & \key{Home} / \key{End} & \key{Home} / \key{End} \\
+Previous / next page (page fits width) & \key{←} / \key{→} & \key{←} / \key{→} \\
+Clear selection & \key{Esc} & \key{Esc} \\
+Zoom around pointer & \key{Cmd}+scroll, or pinch & \key{Ctrl}+scroll \\
+Move a zoomed document & \key{Option}+drag & \key{Alt}+drag \\
+\bottomrule
+\end{longtable}
+
+% ================================================================
+\section{Settings and privacy}\label{sec:settings}
+
+\subsection{What \app{} remembers}
+\app{} has no preferences window; it simply remembers:
+\begin{itemize}
+  \item the list of recently opened files,
+  \item the sidebar mode (hidden, thumbnails or table of contents),
+  \item the window's size and position,
+  \item the folder you last opened a file from.
+\end{itemize}
+These are stored in:
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[macOS] \file{\textasciitilde/Library/Preferences/org.xpreview.XPreview.plist}
+  \item[Windows (portable)] \file{settings\textbackslash XPreview\textbackslash XPreview.ini} inside the
+        \file{XPreview+} folder
+  \item[Linux] \file{\textasciitilde/.config/XPreview/XPreview.conf}
+\end{description}
+To reset \app{}, quit it and delete that file. On macOS you can instead run
+\texttt{defaults delete org.xpreview.XPreview} in Terminal.
+
+\subsection{Privacy and safety}
+\begin{itemize}
+  \item \app{} never connects to the internet by itself. It contains no analytics, no update
+        checks and no accounts.
+  \item Documents cannot make \app{} load anything from the internet or from elsewhere on
+        your computer. For example, pictures referenced by an SVG or ODT file but stored
+        outside it are not loaded.
+  \item Macros and scripts in documents are never run.
+  \item Links only open when you click them, and only web and e-mail links.
+  \item Every file is treated as potentially hostile. Damaged or deliberately malformed files
+        are handled safely and size limits stop them from exhausting memory. Such
+        a file shows an error message instead of crashing the application.
+  \item Exporting never changes the original file.
+\end{itemize}
+
+% ================================================================
+\section{Troubleshooting}
+
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[macOS says \app{} cannot be opened or verified]
+        Allow it once in \menu{System Settings > Privacy \& Security} (see Section~2.1).
+  \item[Windows shows ``Windows protected your PC'']
+        Click \ui{More info}, then \ui{Run anyway}.
+  \item[\app{} is missing from ``Open With'']
+        macOS adds \app{} to that list after it has been copied to \ui{Applications} and opened once.
+  \item[A document looks different from the original]
+        For RTF and ODT files, click \ui{Details\ldots} in the yellow bar to see what was
+        simplified. For an exact rendering, use \ui{Open in Default App}.
+  \item[Text cannot be found or selected]
+        The document may be a scanned image without a text layer, or an image file.
+  \item[``The file is too large to open'']
+        \app{} limits very large or deeply nested files to stay safe and responsive. For
+        example, images may be at most 30\,000 pixels wide or high.
+  \item[A spreadsheet or presentation does not open]
+        OpenDocument spreadsheets and presentations are not supported in version 1.0.
+  \item[HEIC photos do not open on Windows]
+        HEIC and JPEG 2000 images are only supported on macOS.
+  \item[Something else is wrong]
+        Reset \app{} as described in Section~\ref{sec:settings}. If the problem remains, please
+        report it (below).
+\end{description}
+
+\subsection{Reporting problems}
+Please report bugs and ask for features on the project's
+\href{https://github.com/swijeyes/XPreview-Plus/issues}{GitHub issues page}. Include your
+operating system, the \app{} version (\menu{Help > About \app}), and, if possible, a file that
+shows the problem. Report \textbf{security} problems privately through the repository's
+\ui{Security} tab instead.
+
+% ================================================================
+\section{License and credits}
+
+\app{} is Copyright \textcopyright{} 2026 Sanjeeva Wijeyesakere.
+
+\app{} is free software: you can redistribute it and/or modify it under the terms of the GNU
+Affero General Public License as published by the Free Software Foundation, either version 3 of
+the License, or (at your option) any later version. It is distributed in the hope that it will be
+useful, but \textbf{without any warranty}; without even the implied warranty of merchantability or
+fitness for a particular purpose. See the license for details. The full text is included with the
+application (\file{LICENSE}). The source code is available at
+\url{https://github.com/swijeyes/XPreview-Plus}.
+
+\app{} is built with:
+\begin{itemize}
+  \item \textbf{Qt} (LGPL-3.0), the application framework;
+  \item \textbf{PDFium} (BSD-3-Clause / Apache-2.0), for PDF rendering;
+  \item \textbf{miniz} (MIT), for reading OpenDocument packages;
+  \item the \textbf{Arimo}, \textbf{Tinos} and \textbf{Cousine} fonts (Apache-2.0), and the
+        \textbf{Carlito} and \textbf{Caladea} fonts (SIL Open Font License 1.1).
+\end{itemize}
+Their licenses are listed in \file{THIRD\_PARTY\_NOTICES.md} and included with the application.
+The \app{} icon was created by Sanjeeva Wijeyesakere with Google Gemini.
+
+\end{document}

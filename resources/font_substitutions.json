@@ -1,0 +1,28 @@
+{
+  "_comment": "Requested family -> ordered candidates; the first installed or bundled one wins. Metric-compatible fonts first.",
+  "_equivalents": {
+    "_comment": "Same design and metrics: always used instead, silently (not reported as a substitution). Liberation 2.x faces share one unique ID, which breaks bold/italic in PDF export.",
+    "Liberation Sans": "Arimo",
+    "Liberation Serif": "Tinos",
+    "Liberation Mono": "Cousine"
+  },
+  "Calibri": ["Carlito", "Helvetica Neue", "Arimo"],
+  "Calibri Light": ["Carlito", "Helvetica Neue"],
+  "Cambria": ["Caladea", "Georgia", "Tinos"],
+  "Arial": ["Arimo", "Helvetica"],
+  "Helvetica": ["Arimo", "Arial"],
+  "Times New Roman": ["Tinos", "Times"],
+  "Times": ["Tinos", "Times New Roman"],
+  "Courier New": ["Cousine", "Courier", "Menlo"],
+  "Courier": ["Cousine", "Courier New", "Menlo"],
+  "DejaVu Sans": ["Verdana", "Arimo"],
+  "DejaVu Serif": ["Georgia", "Tinos"],
+  "DejaVu Sans Mono": ["Menlo", "Cousine"],
+  "Segoe UI": ["Helvetica Neue", "Arimo"],
+  "Tahoma": ["Verdana", "Arimo"],
+  "Aptos": ["Carlito", "Helvetica Neue"],
+  "Consolas": ["Menlo", "Cousine"],
+  "Symbol": ["Symbol", "Apple Symbols"],
+  "Wingdings": ["Zapf Dingbats", "Apple Symbols"],
+  "OpenSymbol": ["Apple Symbols", "Symbol"]
+}

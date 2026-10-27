@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+#include <winver.h>
+IDI_ICON1 ICON "@CMAKE_SOURCE_DIR@/resources/XPreview.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "ProductName",      "@APP_DISPLAY_NAME@"
+      VALUE "FileDescription",  "@APP_DISPLAY_NAME@ document and image viewer"
+      VALUE "ProductVersion",   "@APP_SHORT_VERSION@"
+      VALUE "FileVersion",      "@PROJECT_VERSION@"
+      VALUE "InternalName",     "XPreview"
+      VALUE "OriginalFilename", "@APP_DISPLAY_NAME@.exe"
+      VALUE "LegalCopyright",   "@APP_COPYRIGHT@. GNU AGPL v3 or later."
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

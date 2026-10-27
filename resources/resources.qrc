@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file>font_substitutions.json</file>
+        <file>icon-1024.png</file>
+    </qresource>
+</RCC>
