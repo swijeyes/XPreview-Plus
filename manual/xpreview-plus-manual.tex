@@ -129,7 +129,7 @@
 % ================================================================
 \section{Introduction}
 
-\app{} is a document and image viewer in the spirit of macOS Preview. It opens a
+\app{} is a document and image viewer in the spirit of a built-in document viewer. It opens a
 file almost instantly, shows it page by page, lets you search, select and copy
 text, and can turn any file it opens into a PDF. It runs on macOS and Windows, and can be built for Linux.
 
@@ -221,7 +221,7 @@ checksum. To check a download, open a terminal in the folder where you saved bot
 % ================================================================
 \section{The \app{} window}\label{sec:window}
 
-\screenshot{window-pdf.png}{\linewidth}{The main window with a four-page PDF. Thumbnails are on
+\screenshot{window-pdf.png}{\linewidth}{The main window with a PDF open. Thumbnails are on
 the left, the page view on the right, and the status bar along the bottom.}
 
 \subsection{Toolbar}
@@ -553,8 +553,23 @@ Move a zoomed document & \key{Option}+drag & \key{Alt}+drag \\
 % ================================================================
 \section{Settings and privacy}\label{sec:settings}
 
+\subsection{Preferences}
+Open \app{}'s preferences with \key{Cmd}+\key{,} on macOS, or from \menu{Edit > Preferences} on
+Windows and Linux. Changes take effect immediately. The window has three tabs:
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[General] the window's look --- a \textbf{Modern} flat theme in Light, Dark or Automatic
+        (Light is the default), or a \textbf{Classic} glossy look in Blue or Gray; the scroll-bar
+        style when using the Modern theme; and whether opening several files keeps them together in
+        one window or gives each file its own window.
+  \item[PDF] what Actual Size (100\%) shows --- pages at their printed size, or one PDF point per
+        screen pixel --- whether to return to the page you were last reading, and the initial page
+        layout.
+  \item[Images] what Actual Size (100\%) shows for images --- their printed size, using the
+        resolution saved in the image, or one image pixel per screen pixel.
+\end{description}
+
 \subsection{What \app{} remembers}
-\app{} has no preferences window; it simply remembers:
+Separately from the settings above, \app{} remembers:
 \begin{itemize}
   \item the list of recently opened files,
   \item the sidebar mode (hidden, thumbnails or table of contents),
