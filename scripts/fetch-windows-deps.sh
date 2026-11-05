@@ -43,8 +43,9 @@ echo "Qt $QT_VER for Windows, llvm-mingw $LLVM_MINGW"
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-*) host=macos-universal ;;
-  Linux-x86_64) host=ubuntu-22.04-x86_64 ;;
-  Linux-aarch64) host=ubuntu-22.04-aarch64 ;;
+  # llvm-mingw publishes Linux builds for ubuntu-20.04; they run on newer Ubuntu too.
+  Linux-x86_64) host=ubuntu-20.04-x86_64 ;;
+  Linux-aarch64) host=ubuntu-20.04-aarch64 ;;
   *) echo "unsupported host" >&2; exit 1 ;;
 esac
 
