@@ -18,7 +18,11 @@ jobs:
   windows:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Files uploaded through the GitHub website lose their execute bit.
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
 
       - name: Install build tools
         run: |
@@ -34,10 +38,18 @@ jobs:
           arch: linux_gcc_64
           cache: true
 
+      # The Windows Qt needs the host Qt tools (QT_HOST_PATH). Fail here, with the
+      # path shown, rather than deep inside CMake.
+      - name: Check host Qt
+        run: |
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+          test -x "$QT_ROOT_DIR/bin/qmake" || { echo "error: host Qt not found under QT_ROOT_DIR" >&2; exit 1; }
+          ls "$QT_ROOT_DIR/bin" | head -40
+
       - name: Build and package the Windows zip
         env:
           QT_HOST_PATH: ${{ env.QT_ROOT_DIR }}
-        run: scripts/package-windows.sh release
+        run: bash scripts/package-windows.sh release
 
       - name: Attach to the release
         env:
