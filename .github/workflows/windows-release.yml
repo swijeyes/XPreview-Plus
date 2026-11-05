@@ -18,7 +18,11 @@ jobs:
   windows:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Files uploaded through the GitHub website lose their execute bit.
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
 
       - name: Install build tools
         run: |
@@ -37,7 +41,7 @@ jobs:
       - name: Build and package the Windows zip
         env:
           QT_HOST_PATH: ${{ env.QT_ROOT_DIR }}
-        run: scripts/package-windows.sh release
+        run: bash scripts/package-windows.sh release
 
       - name: Attach to the release
         env:
