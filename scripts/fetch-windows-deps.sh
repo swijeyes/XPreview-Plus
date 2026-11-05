@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 
 QT_VER="${QT_VER:-$(qmake -query QT_VERSION 2>/dev/null || qmake6 -query QT_VERSION)}"
 MINIZ_VER="${MINIZ_VER:-3.1.0}"
+PDFIUM_BUILD="${PDFIUM_BUILD:-8125}"   # pdfium-binaries tag chromium/<build>; pinned so builds are repeatable
 DEST=third_party/windows
 mkdir -p "$DEST" && cd "$DEST"
 
@@ -84,7 +85,7 @@ rm -f Updates.xml qt-archives.txt
 if [[ ! -f pdfium/bin/pdfium.dll ]]; then
   echo "Fetching PDFium (win-x64)..."
   mkdir -p pdfium
-  curl -fsSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz" \
+  curl -fsSL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$PDFIUM_BUILD/pdfium-win-x64.tgz" \
     | tar xz -C pdfium
 fi
 
