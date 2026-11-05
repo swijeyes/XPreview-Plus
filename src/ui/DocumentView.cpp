@@ -13,10 +13,15 @@
 #include <QNativeGestureEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScreen>
 #include <QScrollBar>
 #include <QStyle>
+#include <QTimer>
 #include <QUrl>
+#include <QWindow>
 #include <QtMath>
+
+#include <limits>
 
 namespace {
 
@@ -50,19 +55,47 @@ DocumentView::DocumentView(DocumentPtr doc, RenderService *renderer, QWidget *pa
 
 QSizeF DocumentView::displaySize(int page) const
 {
-    return Exporter::rotatedSize(m_doc->pageSize(page), m_rotation) * m_zoom;
+    return Exporter::rotatedSize(m_doc->pageSize(page), m_rotation) * scale();
+}
+
+std::pair<int, int> DocumentView::shownPages() const
+{
+    const int n = m_doc->pageCount();
+    switch (m_mode) {
+    case DisplayMode::SinglePage: return {m_currentPage, m_currentPage};
+    case DisplayMode::TwoPages: {
+        const int first = m_currentPage - m_currentPage % 2;
+        return {first, qMin(first + 1, n - 1)};
+    }
+    case DisplayMode::Continuous: break;
+    }
+    return {0, n - 1};
 }
 
 void DocumentView::relayout()
 {
     const int n = m_doc->pageCount();
-    m_tops.resize(n);
+    m_rects = QVector<QRectF>(n);
+    const auto [first, last] = shownPages();
     double y = kMargin, maxW = 0;
-    for (int i = 0; i < n; ++i) {
-        const QSizeF s = displaySize(i);
-        m_tops[i] = y;
-        y += s.height() + kGap;
-        maxW = qMax(maxW, s.width());
+    if (m_mode == DisplayMode::TwoPages) {
+        double x = kMargin, h = 0;
+        for (int i = first; i <= last; ++i) {
+            const QSizeF s = displaySize(i);
+            m_rects[i] = QRectF(QPointF(x, kMargin), s);
+            x += s.width() + kGap;
+            h = qMax(h, s.height());
+        }
+        maxW = x - kGap - kMargin;
+        y += h + kGap;
+    } else {
+        for (int i = first; i <= last; ++i) {
+            const QSizeF s = displaySize(i);
+            m_rects[i] = QRectF(QPointF(0, y), s);
+            y += s.height() + kGap;
+            maxW = qMax(maxW, s.width());
+        }
+        for (int i = first; i <= last; ++i) m_rects[i].moveLeft(kMargin + (maxW - m_rects[i].width()) / 2);
     }
     m_content = QSizeF(maxW + 2 * kMargin, y - kGap + kMargin);
     updateScrollBars();
@@ -80,9 +113,10 @@ void DocumentView::updateScrollBars()
 
 QRectF DocumentView::pageRect(int page) const
 {
-    const QSizeF s = displaySize(page);
+    const QRectF r = m_rects.value(page);
+    if (r.isNull()) return {};
     const double contentW = qMax(m_content.width(), double(viewport()->width()));
-    return QRectF((contentW - s.width()) / 2, m_tops.value(page), s.width(), s.height());
+    return r.translated((contentW - m_content.width()) / 2, 0);
 }
 
 QTransform DocumentView::pageTransform(int page) const
@@ -91,7 +125,7 @@ QTransform DocumentView::pageTransform(int page) const
     QTransform t;
     t.translate(qRound(r.x() - horizontalScrollBar()->value()), qRound(r.y() - verticalScrollBar()->value()));
     // Rotation inside the page box, then points -> logical px.
-    const QSizeF s = m_doc->pageSize(page) * m_zoom;
+    const QSizeF s = m_doc->pageSize(page) * scale();
     switch (m_rotation) {
     case 90: t.translate(s.height(), 0); break;
     case 180: t.translate(s.width(), s.height()); break;
@@ -99,18 +133,32 @@ QTransform DocumentView::pageTransform(int page) const
     default: break;
     }
     t.rotate(m_rotation);
-    t.scale(m_zoom, m_zoom);
+    t.scale(scale(), scale());
     return t;
 }
 
 int DocumentView::pageAt(QPointF pos) const
 {
-    const double y = pos.y() + verticalScrollBar()->value();
-    for (int i = 0; i < m_tops.size(); ++i) {
-        const QRectF r = pageRect(i);
-        if (y < r.bottom() + kGap / 2) return i;
+    const QPointF c = pos + QPointF(horizontalScrollBar()->value(), verticalScrollBar()->value());
+    const auto [first, last] = shownPages();
+    if (m_mode == DisplayMode::Continuous) {
+        for (int i = first; i <= last; ++i)
+            if (c.y() < pageRect(i).bottom() + kGap / 2) return i;
+        return last;
     }
-    return m_tops.size() - 1;
+    // The nearest of the pages shown.
+    int best = first;
+    double bestDist = std::numeric_limits<double>::max();
+    for (int i = first; i <= last; ++i) {
+        const QRectF r = pageRect(i);
+        const double dx = qMax(0.0, qMax(r.left() - c.x(), c.x() - r.right()));
+        const double dy = qMax(0.0, qMax(r.top() - c.y(), c.y() - r.bottom()));
+        if (dx * dx + dy * dy < bestDist) {
+            bestDist = dx * dx + dy * dy;
+            best = i;
+        }
+    }
+    return best;
 }
 
 QPointF DocumentView::toPage(int page, QPointF pos) const
@@ -128,14 +176,15 @@ void DocumentView::paintEvent(QPaintEvent *event)
     if (!m_renderer) return;
 
     const double dpr = viewport()->devicePixelRatioF();
-    const double scale = m_zoom * dpr;  // device px per point
+    const double scale = this->scale() * dpr;  // device px per point
     const int T = RenderService::kTileSize;
     const QRectF vis = QRectF(event->rect()).translated(horizontalScrollBar()->value(),
                                                         verticalScrollBar()->value());
-    for (int i = 0; i < m_tops.size(); ++i) {
+    const auto [first, last] = shownPages();
+    for (int i = first; i <= last; ++i) {
         const QRectF content = pageRect(i);
         if (content.bottom() < vis.top()) continue;
-        if (content.top() > vis.bottom()) break;
+        if (content.top() > vis.bottom()) break;  // laid out top to bottom, then left to right
         const QRectF vr = content.translated(-horizontalScrollBar()->value(), -verticalScrollBar()->value());
 
         // Paper and shadow
@@ -202,14 +251,23 @@ void DocumentView::applyFit()
     // zoom changes -> scrollbar disappears -> ...).
     const QSize full = maximumViewportSize();
     const int sb = style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, verticalScrollBar());
-    double maxW = 0;
-    for (int i = 0; i < m_doc->pageCount(); ++i)
-        maxW = qMax(maxW, Exporter::rotatedSize(m_doc->pageSize(i), m_rotation).width());
-    const double availW = qMax(50.0, full.width() - sb - 2 * kMargin);
-    double z = availW / qMax(1.0, maxW);
+    const int n = m_doc->pageCount();
+    auto rotated = [this](int i) { return Exporter::rotatedSize(m_doc->pageSize(i), m_rotation); };
+    // Widest row over the whole document, so paging keeps the zoom.
+    double maxW = 0, gaps = 0;
+    if (m_mode == DisplayMode::TwoPages) {
+        for (int i = 0; i < n; i += 2) maxW = qMax(maxW, rotated(i).width() + (i + 1 < n ? rotated(i + 1).width() : 0));
+        if (n > 1) gaps = kGap;
+    } else {
+        for (int i = 0; i < n; ++i) maxW = qMax(maxW, rotated(i).width());
+    }
+    const double availW = qMax(50.0, full.width() - sb - 2 * kMargin - gaps);
+    double z = availW / qMax(1.0, maxW) / m_unit;
     if (m_fit == FitMode::Page) {
-        const QSizeF s = Exporter::rotatedSize(m_doc->pageSize(m_currentPage), m_rotation);
-        z = qMin(z, qMax(50.0, full.height() - 2 * kMargin) / qMax(1.0, s.height()));
+        double h = 0;
+        const auto [first, last] = m_mode == DisplayMode::Continuous ? std::pair{m_currentPage, m_currentPage} : shownPages();
+        for (int i = first; i <= last; ++i) h = qMax(h, rotated(i).height());
+        z = qMin(z, qMax(50.0, full.height() - 2 * kMargin) / qMax(1.0, h) / m_unit);
         // Small images are not blown up.
         if (m_doc->kind() == DocumentKind::Image || m_doc->kind() == DocumentKind::Svg) z = qMin(z, 1.0);
     }
@@ -238,7 +296,7 @@ double DocumentView::maxZoom() const
         total += s.height();
         widest = qMax(widest, s.width());
     }
-    const double limit = Limits::kMaxContentPixels / qMax(1.0, qMax(total, widest));
+    const double limit = Limits::kMaxContentPixels / qMax(1.0, qMax(total, widest)) / m_unit;
     return qMax(kMinZoom, qMin(kMaxZoom, limit));
 }
 
@@ -293,14 +351,90 @@ void DocumentView::rotateBy(int degrees)
     goToPage(page);
 }
 
+void DocumentView::setDisplayMode(DisplayMode mode)
+{
+    if (mode == m_mode) return;
+    m_mode = mode;
+    if (m_renderer) m_renderer->cancelPending();
+    relayout();
+    applyFit();
+    goToPage(m_currentPage);
+}
+
+void DocumentView::setPhysicalScale(bool on)
+{
+    m_physical = on;
+    updateUnitScale();
+}
+
+void DocumentView::refresh()
+{
+    if (m_renderer) m_renderer->cancelPending();
+    relayout();
+    applyFit();
+    goToPage(m_currentPage);
+    emit zoomChanged(m_zoom);
+}
+
+void DocumentView::updateUnitScale()
+{
+    double unit = 1.0;
+    if (m_physical)
+        if (const QScreen *s = screen())
+            unit = qBound(0.5, s->physicalDotsPerInch() / 72.0, 3.0);  // bad EDIDs exist
+    if (qAbs(unit - m_unit) < 1e-6) return;
+    m_unit = unit;
+    if (m_renderer) m_renderer->cancelPending();
+    relayout();
+    applyFit();
+    goToPage(m_currentPage);
+    emit zoomChanged(m_zoom);
+}
+
 void DocumentView::goToPage(int page, double yPoints)
 {
-    if (page < 0 || page >= m_tops.size()) return;
+    if (page < 0 || page >= m_doc->pageCount()) return;
+    if (page != m_currentPage && m_mode != DisplayMode::Continuous) {
+        m_currentPage = page;
+        if (m_renderer) m_renderer->cancelPending();
+        relayout();
+        applyFit();
+        emit currentPageChanged(page);
+    }
+    if (!isVisible() || viewport()->height() < 50) {
+        // Not laid out yet: remember, and go there once it is.
+        m_pendingPage = page;
+        m_pendingY = yPoints;
+        if (page != m_currentPage) {
+            m_currentPage = page;
+            emit currentPageChanged(page);
+        }
+        return;
+    }
     const QRectF r = pageRect(page);
     double y = r.top() - kMargin;
-    if (yPoints >= 0 && m_rotation == 0) y = r.top() + yPoints * m_zoom - kMargin * 2;
+    if (yPoints >= 0 && m_rotation == 0) y = r.top() + yPoints * scale() - kMargin * 2;
     verticalScrollBar()->setValue(qRound(y));
     updateCurrentPage();
+}
+
+void DocumentView::stepPage(int direction)
+{
+    if (m_mode == DisplayMode::Continuous) return goToPage(m_currentPage + direction);
+    const int step = m_mode == DisplayMode::TwoPages ? 2 : 1;
+    const int target = shownPages().first + direction * step;
+    if (target < 0 || target >= m_doc->pageCount()) return;
+    m_flipAccum = 0;
+    m_lastFlip.start();
+    goToPage(target);
+}
+
+void DocumentView::applyPendingPage()
+{
+    if (m_pendingPage < 0 || !isVisible() || viewport()->height() < 50) return;
+    const int page = m_pendingPage;
+    m_pendingPage = -1;
+    goToPage(page, m_pendingY);
 }
 
 void DocumentView::setHits(const QVector<TextHit> &hits)
@@ -340,6 +474,16 @@ void DocumentView::resizeEvent(QResizeEvent *e)
     QAbstractScrollArea::resizeEvent(e);
     updateScrollBars();
     applyFit();
+    applyPendingPage();
+}
+
+void DocumentView::showEvent(QShowEvent *e)
+{
+    QAbstractScrollArea::showEvent(e);
+    if (QWindow *w = window()->windowHandle())
+        connect(w, &QWindow::screenChanged, this, &DocumentView::updateUnitScale, Qt::UniqueConnection);
+    updateUnitScale();
+    QTimer::singleShot(0, this, &DocumentView::applyPendingPage);
 }
 
 void DocumentView::scrollContentsBy(int, int)
@@ -353,7 +497,7 @@ void DocumentView::updateCurrentPage()
     // The page occupying the upper-middle of the viewport is "current"; at
     // the very top it is always the first page (also guards the tiny
     // layouts a widget goes through before it is first shown).
-    if (!isVisible() || viewport()->height() < 50) return;
+    if (m_mode != DisplayMode::Continuous || !isVisible() || viewport()->height() < 50) return;
     const int page = verticalScrollBar()->value() == 0
                          ? 0
                          : pageAt(QPointF(0, qMin(viewport()->height() * 0.35, 200.0)));
@@ -470,6 +614,24 @@ void DocumentView::wheelEvent(QWheelEvent *e)
         e->accept();
         return;
     }
+    const int dy = e->angleDelta().y();
+    if (m_mode != DisplayMode::Continuous && dy != 0) {
+        const QScrollBar *v = verticalScrollBar();
+        if ((dy < 0 && v->value() >= v->maximum()) || (dy > 0 && v->value() <= v->minimum())) {
+            // Pushing past the end of the page turns it; trackpad momentum
+            // and a short pause after each turn never do.
+            if (e->phase() != Qt::ScrollMomentum && (!m_lastFlip.isValid() || m_lastFlip.elapsed() > 350)) {
+                m_flipAccum += dy;
+                if (qAbs(m_flipAccum) >= 240) {
+                    stepPage(dy < 0 ? 1 : -1);
+                    if (dy > 0) verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+                }
+            }
+            e->accept();
+            return;
+        }
+        m_flipAccum = 0;
+    }
     QAbstractScrollArea::wheelEvent(e);
 }
 
@@ -497,15 +659,24 @@ void DocumentView::keyPressEvent(QKeyEvent *e)
     case Qt::Key_Home: goToPage(0); return;
     case Qt::Key_End: goToPage(m_doc->pageCount() - 1); return;
     case Qt::Key_Space:
-        verticalScrollBar()->setValue(verticalScrollBar()->value() +
-                                      (e->modifiers() & Qt::ShiftModifier ? -1 : 1) *
-                                          int(viewport()->height() * 0.9));
+    case Qt::Key_PageDown:
+    case Qt::Key_PageUp: {
+        const bool forward = e->key() == Qt::Key_PageDown ||
+                             (e->key() == Qt::Key_Space && !(e->modifiers() & Qt::ShiftModifier));
+        QScrollBar *v = verticalScrollBar();
+        if (m_mode != DisplayMode::Continuous && (forward ? v->value() >= v->maximum() : v->value() <= v->minimum())) {
+            stepPage(forward ? 1 : -1);
+            return;
+        }
+        if (e->key() != Qt::Key_Space) break;
+        v->setValue(v->value() + (forward ? 1 : -1) * int(viewport()->height() * 0.9));
         return;
+    }
     case Qt::Key_Left:
-        if (horizontalScrollBar()->maximum() == 0) { goToPage(m_currentPage - 1); return; }
+        if (horizontalScrollBar()->maximum() == 0) { stepPage(-1); return; }
         break;
     case Qt::Key_Right:
-        if (horizontalScrollBar()->maximum() == 0) { goToPage(m_currentPage + 1); return; }
+        if (horizontalScrollBar()->maximum() == 0) { stepPage(1); return; }
         break;
     case Qt::Key_Escape: clearSelection(); return;
     default: break;

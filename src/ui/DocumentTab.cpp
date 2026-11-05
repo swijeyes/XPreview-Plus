@@ -3,8 +3,11 @@
 
 #include "DocumentTab.h"
 
+#include "Appearance.h"
 #include "DocumentView.h"
 #include "InfoBar.h"
+#include "Preferences.h"
+#include "image/ImageDocument.h"
 #include "RenderService.h"
 #include "ThumbnailSidebar.h"
 
@@ -16,6 +19,7 @@
 #include <QMessageBox>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -56,6 +60,7 @@ DocumentTab::DocumentTab(const QString &path, QWidget *parent)
 
 DocumentTab::~DocumentTab()
 {
+    if (m_view && m_doc && m_doc->kind() == DocumentKind::Pdf) Preferences::setLastPage(m_path, m_view->currentPage());
     // Let in-flight work finish; results are discarded.
     m_loadWatcher.waitForFinished();
     m_searchWatcher.waitForFinished();
@@ -134,6 +139,20 @@ void DocumentTab::onLoaded()
     m_sidebarStack->addWidget(m_thumbs);
     m_sidebarStack->addWidget(m_outline);
     m_sidebarStack->setMinimumWidth(110);
+    // Source-list tint of the current theme.
+    // Set on the views themselves: the splitter's style sheet stops palette
+    // propagation from the stack.
+    auto tintSidebar = [this] {
+        for (QAbstractScrollArea *view : {static_cast<QAbstractScrollArea *>(m_thumbs),
+                                          static_cast<QAbstractScrollArea *>(m_outline)}) {
+            QPalette pal = view->palette();
+            pal.setColor(QPalette::Base, Appearance::instance()->sidebarBackground());
+            view->setPalette(pal);
+            view->viewport()->setPalette(pal);
+        }
+    };
+    tintSidebar();
+    connect(Appearance::instance(), &Appearance::themeChanged, this, tintSidebar);
 
     m_view = new DocumentView(m_doc, m_renderer, m_splitter);
     m_splitter->addWidget(m_sidebarStack);
@@ -161,7 +180,34 @@ void DocumentTab::onLoaded()
         m_view->goToPage(item->data(0, Qt::UserRole).toInt(), item->data(0, Qt::UserRole + 1).toDouble());
     });
 
-    m_thumbs->setCurrentPage(0);
+    if (m_doc->kind() == DocumentKind::Pdf) {
+        Preferences *prefs = Preferences::instance();
+        auto applyScale = [this] {
+            m_view->setPhysicalScale(Preferences::instance()->pdfScale() == Preferences::PdfScale::RealSize);
+        };
+        applyScale();
+        connect(prefs, &Preferences::pdfScaleChanged, this, applyScale);
+        m_view->setDisplayMode(prefs->pdfDisplayMode());
+        const int last = Preferences::lastPage(m_path);
+        // After this event: the view gets its final size first.
+        if (prefs->restoreLastPage() && last > 0 && last < m_doc->pageCount())
+            QTimer::singleShot(0, m_view, [this, last] { m_view->goToPage(last); });
+    }
+
+    if (m_doc->kind() == DocumentKind::Image) {
+        Preferences *prefs = Preferences::instance();
+        auto *img = static_cast<ImageDocument *>(m_doc.get());
+        auto applyImageScale = [this, img] {
+            const bool real = Preferences::instance()->imageScale() == Preferences::ImageScale::RealSize;
+            img->setPrintedSize(real);
+            m_view->setPhysicalScale(real);
+            m_view->refresh();
+        };
+        applyImageScale();
+        connect(prefs, &Preferences::imageScaleChanged, this, applyImageScale);
+    }
+
+    m_thumbs->setCurrentPage(m_view->currentPage());
     setSidebar(m_sidebarMode);
     m_view->setFocus();
     emit loaded();

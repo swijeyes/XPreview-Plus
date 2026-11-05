@@ -3,11 +3,15 @@
 
 #include "MainWindow.h"
 
+#include "Appearance.h"
+#include "AppStyle.h"
 #include "DocumentTab.h"
 #include "DocumentView.h"
+#include "Preferences.h"
 #include "core/DocumentLoader.h"
 #include "core/Exporter.h"
 #include "image/ImageDocument.h"
+#include "PreferencesDialog.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -19,11 +23,15 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QMessageBox>
+
+#include <utility>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
@@ -31,12 +39,16 @@
 #include <QPrinter>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QStyleOptionToolButton>
 #include <QSettings>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
+#include <QVBoxLayout>
+#include <QWindow>
 #include <QtConcurrent>
 
 namespace {
@@ -105,6 +117,105 @@ void drawRotate(QPainter &p, const QRectF &r, bool left)
     p.drawLine(tip, tip + QPointF(left ? -s * 0.3 : s * 0.3, s * 0.9));
 }
 
+// Classic "textured rounded" toolbar button. Buttons placed side by
+// side with First/Middle/Last join into one segmented control.
+class TexturedButton : public QToolButton {
+public:
+    enum Segment { Only, First, Middle, Last };
+
+    TexturedButton(Segment segment, QAction *action, QWidget *parent) : QToolButton(parent), m_segment(segment)
+    {
+        if (action) setDefaultAction(action);
+        setFocusPolicy(Qt::NoFocus);
+        setIconSize(QSize(16, 16));
+        setFixedSize(32, 24);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const bool active = isActiveWindow();
+        const bool down = isDown() || isChecked();
+        const double radius = 4;
+        // Bottom pixel is left for the embossed highlight.
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -1.5);
+        // Inner ends extend past the button so only outer corners are round.
+        QRectF shape = r;
+        if (m_segment == First || m_segment == Middle) shape.setRight(r.right() + radius + 2);
+        if (m_segment == Middle || m_segment == Last) shape.setLeft(r.left() - radius - 2);
+        p.setClipRect(rect());
+
+        p.setPen(QColor(255, 255, 255, active ? 140 : 90));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(shape.translated(0, 1), radius, radius);
+
+        QLinearGradient g(0, r.top(), 0, r.bottom());
+        if (down) {
+            g.setColorAt(0, QColor(0x8c, 0x8c, 0x8c));
+            g.setColorAt(1, QColor(0xb4, 0xb4, 0xb4));
+        } else if (active) {
+            g.setColorAt(0, QColor(0xfd, 0xfd, 0xfd));
+            g.setColorAt(1, QColor(0xd3, 0xd3, 0xd3));
+        } else {
+            g.setColorAt(0, QColor(0xf8, 0xf8, 0xf8));
+            g.setColorAt(1, QColor(0xe6, 0xe6, 0xe6));
+        }
+        const QColor outline = active ? QColor(0x5e, 0x5e, 0x5e) : QColor(0x9c, 0x9c, 0x9c);
+        p.setPen(outline);
+        p.setBrush(g);
+        p.drawRoundedRect(shape, radius, radius);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        if (m_segment == First || m_segment == Middle) p.drawLine(QPointF(width() - 1, r.top()), QPointF(width() - 1, r.bottom()));
+
+        QRect content = rect().adjusted(0, 0, 0, -1);
+        if (popupMode() == MenuButtonPopup && menu()) {
+            QStyleOptionToolButton opt;
+            initStyleOption(&opt);
+            const QRect menuRect = style()->subControlRect(QStyle::CC_ToolButton, &opt, QStyle::SC_ToolButtonMenu, this);
+            content.setRight(menuRect.left());
+            const QPointF c(menuRect.center().x() + 0.5, r.center().y() + 1);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(isEnabled() ? QColor(0x30, 0x30, 0x30) : QColor(0x9a, 0x9a, 0x9a));
+            p.drawPolygon(QPolygonF{c + QPointF(-3, -1.5), c + QPointF(3, -1.5), c + QPointF(0, 2)});
+        }
+        const QSize s = iconSize();
+        const QRect iconRect(content.center().x() - s.width() / 2 + 1, content.center().y() - s.height() / 2 + 1,
+                             s.width(), s.height());
+        icon().paint(&p, iconRect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled,
+                     isChecked() ? QIcon::On : QIcon::Off);
+    }
+
+private:
+    Segment m_segment;
+};
+
+// Classic toolbar item: controls with a small caption underneath.
+QWidget *toolGroup(const QString &caption, const QList<QWidget *> &controls, QWidget *parent)
+{
+    auto *group = new QWidget(parent);
+    group->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *column = new QVBoxLayout(group);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(2);
+    auto *strip = new QWidget(group);
+    strip->setFixedHeight(24);
+    auto *row = new QHBoxLayout(strip);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    for (QWidget *c : controls) row->addWidget(c, 0, Qt::AlignVCenter);
+    column->addWidget(strip, 0, Qt::AlignHCenter);
+    auto *label = new QLabel(caption, group);
+    label->setAlignment(Qt::AlignHCenter);
+    QFont f = label->font();
+    f.setPointSizeF(f.pointSizeF() - 2);
+    label->setFont(f);
+    column->addWidget(label);
+    return group;
+}
+
 QStringList recentFiles()
 {
     return QSettings().value(QStringLiteral("recentFiles")).toStringList();
@@ -115,12 +226,21 @@ QStringList recentFiles()
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     setAcceptDrops(true);
-    setUnifiedTitleAndToolBarOnMac(true);
+#ifdef Q_OS_MACOS
+    // Classic unified window: the gray gradient runs up under a
+    // transparent title bar (see paintEvent and AppStyle's CE_ToolBar).
+    setWindowFlag(Qt::ExpandedClientAreaHint);
+    setWindowFlag(Qt::NoTitleBarBackgroundHint);
+#endif
     m_tabs = new QTabWidget(this);
     m_tabs->setDocumentMode(true);
     m_tabs->setTabsClosable(true);
     m_tabs->setMovable(true);
     m_tabs->setTabBarAutoHide(true);
+    m_tabs->tabBar()->setDrawBase(false);
+    m_tabs->tabBar()->setExpanding(true);
+    updateTabBarStyle();
+    connect(Appearance::instance(), &Appearance::themeChanged, this, &MainWindow::updateTabBarStyle);
     setCentralWidget(m_tabs);
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
     connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
@@ -164,6 +284,53 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     QSettings s;
     if (!restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray())) resize(1100, 820);
     updateUi();
+    s_windows.append(this);
+}
+
+QList<MainWindow *> MainWindow::s_windows;
+
+MainWindow::~MainWindow() { s_windows.removeAll(this); }
+
+MainWindow *MainWindow::front()
+{
+    if (auto *w = qobject_cast<MainWindow *>(QApplication::activeWindow())) return w;
+    return s_windows.isEmpty() ? nullptr : s_windows.last();
+}
+
+void MainWindow::updateTabBarStyle()
+{
+    Appearance *a = Appearance::instance();
+    if (!a->isFlat()) {
+        // Classic dark-gray tabs.
+        m_tabs->tabBar()->setStyleSheet(QStringLiteral(
+            "QTabBar { background: #a3a3a3; }"
+            "QTabBar::tab { color: #262626; padding: 3px 20px; min-width: 80px;"
+            "  border: 1px solid #5f5f5f; border-left: none; border-top-color: #6e6e6e;"
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #b3b3b3, stop:1 #9e9e9e); }"
+            "QTabBar::tab:first { border-left: 1px solid #5f5f5f; }"
+            "QTabBar::tab:!selected:hover {"
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #bdbdbd, stop:1 #a8a8a8); }"
+            "QTabBar::tab:selected { color: black; border-top: none;"
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d8d8d8, stop:1 #c4c4c4); }"));
+        return;
+    }
+    // Flat tabs: the selected one lifts to the surface colour with an accent
+    // underline; the rest sit in the window chrome.
+    const bool dark = a->isDark();
+    const QString chrome = a->windowChrome().name();
+    const QString border = a->chromeBorder().name();
+    const QString text = dark ? QStringLiteral("#e5e5ea") : QStringLiteral("#1d1d1f");
+    const QString dim = dark ? QStringLiteral("#8e8e93") : QStringLiteral("#86868b");
+    const QString surface = dark ? QStringLiteral("#1c1c1e") : QStringLiteral("#ffffff");
+    const QString accent = QStringLiteral("#0a84ff");
+    m_tabs->tabBar()->setStyleSheet(
+        QStringLiteral("QTabBar { background: %1; }"
+                       "QTabBar::tab { color: %5; padding: 5px 20px; min-width: 80px;"
+                       "  border: 1px solid %2; border-left: none; }"
+                       "QTabBar::tab:first { border-left: 1px solid %2; }"
+                       "QTabBar::tab:!selected { color: %6; background: %1; }"
+                       "QTabBar::tab:selected { color: %3; background: %4; border-bottom: 2px solid %7; }")
+            .arg(chrome, border, text, surface, text, dim, accent));
 }
 
 void MainWindow::createActions()
@@ -228,9 +395,9 @@ void MainWindow::createActions()
     m_zoomIn->setShortcuts({QKeySequence::ZoomIn, QKeySequence(Qt::CTRL | Qt::Key_Equal)});
 
     m_prevPage = make(tr("Previous Page"), QKeySequence(Qt::ALT | Qt::CTRL | Qt::Key_Up),
-                      [view] { if (auto *v = view()) v->goToPage(v->currentPage() - 1); });
+                      [view] { if (auto *v = view()) v->stepPage(-1); });
     m_nextPage = make(tr("Next Page"), QKeySequence(Qt::ALT | Qt::CTRL | Qt::Key_Down),
-                      [view] { if (auto *v = view()) v->goToPage(v->currentPage() + 1); });
+                      [view] { if (auto *v = view()) v->stepPage(1); });
     m_firstPage = make(tr("First Page"), QKeySequence(Qt::CTRL | Qt::Key_Up), [view] { if (auto *v = view()) v->goToPage(0); });
     m_lastPage = make(tr("Last Page"), QKeySequence(Qt::CTRL | Qt::Key_Down), [this, view] {
         if (auto *v = view()) v->goToPage(currentTab()->document()->pageCount() - 1);
@@ -244,6 +411,8 @@ void MainWindow::createActions()
     m_inspector = make(tr("Show Inspector"), QKeySequence(Qt::CTRL | Qt::Key_I), [this] {
         if (DocumentTab *t = currentTab()) t->showDetails();
     });
+    m_prefs = make(tr("Preferences…"), QKeySequence::Preferences, [this] { showPreferences(); });
+    m_prefs->setMenuRole(QAction::PreferencesRole);
     m_export->setIcon(themedIcon(QIcon::ThemeIcon::DocumentSaveAs, [](QPainter &p, const QRectF &r) {
         p.drawRect(r.adjusted(r.width() * 0.15, 0, -r.width() * 0.15, 0));
         p.drawLine(QPointF(r.center().x(), r.top() + r.height() * 0.2), QPointF(r.center().x(), r.bottom() - r.height() * 0.2));
@@ -272,6 +441,8 @@ void MainWindow::createMenus()
     edit->addAction(m_find);
     edit->addAction(m_findNext);
     edit->addAction(m_findPrev);
+    edit->addSeparator();
+    edit->addAction(m_prefs);  // moves to the application menu on macOS
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(m_hideSidebar);
@@ -326,44 +497,60 @@ void MainWindow::createMenus()
 void MainWindow::createToolBar()
 {
     QToolBar *tb = addToolBar(tr("Toolbar"));
+    m_toolBar = tb;
     tb->setObjectName(QStringLiteral("MainToolbar"));
     tb->setMovable(false);
-    tb->setIconSize(QSize(18, 18));
-    tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    auto gap = [this, tb](int w) {
+        auto *g = new QWidget(this);
+        g->setFixedWidth(w);
+        tb->addWidget(g);
+    };
+    gap(6);  // QToolBar ignores contents margins
 
-    m_sidebarButton = new QToolButton(this);
+    m_sidebarButton = new TexturedButton(TexturedButton::Only, nullptr, this);
     m_sidebarButton->setIcon(sidebarIcon());
     m_sidebarButton->setToolTip(tr("Sidebar"));
     m_sidebarButton->setPopupMode(QToolButton::MenuButtonPopup);
+    m_sidebarButton->setFixedWidth(44);
     auto *menu = new QMenu(m_sidebarButton);
     menu->addAction(m_hideSidebar);
     menu->addAction(m_thumbs);
     menu->addAction(m_toc);
     m_sidebarButton->setMenu(menu);
     connect(m_sidebarButton, &QToolButton::clicked, this, [this] { setSidebarMode(m_sidebarMode == 0 ? 1 : 0); });
-    tb->addWidget(m_sidebarButton);
-    tb->addSeparator();
-    tb->addAction(m_zoomOut);
-    tb->addAction(m_zoomIn);
-    tb->addSeparator();
-    tb->addAction(m_rotLeft);
-    tb->addAction(m_rotRight);
+    tb->addWidget(toolGroup(tr("Sidebar"), {m_sidebarButton}, this));
+    gap(14);
+    tb->addWidget(toolGroup(tr("Zoom"), {new TexturedButton(TexturedButton::First, m_zoomOut, this),
+                                         new TexturedButton(TexturedButton::Last, m_zoomIn, this)}, this));
+    gap(14);
+    tb->addWidget(toolGroup(tr("Rotate"), {new TexturedButton(TexturedButton::First, m_rotLeft, this),
+                                           new TexturedButton(TexturedButton::Last, m_rotRight, this)}, this));
 
     auto *spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     tb->addWidget(spacer);
 
-    tb->addAction(m_export);
+    tb->addWidget(toolGroup(tr("Export"), {new TexturedButton(TexturedButton::Only, m_export, this)}, this));
+    gap(8);
     m_searchStatus = new QLabel(this);
     m_searchStatus->setMinimumWidth(70);
     m_searchStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     tb->addWidget(m_searchStatus);
+    gap(6);
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText(tr("Search"));
     m_search->setClearButtonEnabled(true);
-    m_search->setFixedWidth(200);
+    m_search->setFixedSize(200, 22);
     m_search->setAttribute(Qt::WA_MacShowFocusRect, false);
-    tb->addWidget(m_search);
+    // Rounded search field, as in classic toolbars.
+    m_search->setStyleSheet(QStringLiteral(
+        "QLineEdit { background: white; border: 1px solid #6f6f6f; border-radius: 10px; padding: 0 6px; }"
+        "QLineEdit:focus { border: 2px solid palette(highlight); padding: 0 5px; }"
+        "QLineEdit:disabled { background: #ececec; border-color: #9a9a9a; }"));
+    tb->addWidget(toolGroup(tr("Search"), {m_search}, this));
+    gap(4);
+    // Empty toolbar space and captions move the window (handleChromeMouse).
+    tb->installEventFilter(this);
     connect(m_search, &QLineEdit::returnPressed, this, [this] {
         DocumentTab *t = currentTab();
         if (!t) return;
@@ -440,12 +627,25 @@ void MainWindow::openFile(const QString &path)
 {
     const QString abs = QFileInfo(path).absoluteFilePath();
     if (!QFileInfo(abs).isFile()) return;
-    // Already open: switch to it.
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        if (auto *t = qobject_cast<DocumentTab *>(m_tabs->widget(i)); t && t->path() == abs) {
-            m_tabs->setCurrentIndex(i);
-            return;
+    // Already open in any window: raise it.
+    for (MainWindow *w : std::as_const(s_windows)) {
+        for (int i = 0; i < w->m_tabs->count(); ++i) {
+            if (auto *t = qobject_cast<DocumentTab *>(w->m_tabs->widget(i)); t && t->path() == abs) {
+                w->m_tabs->setCurrentIndex(i);
+                w->raise();
+                w->activateWindow();
+                return;
+            }
         }
+    }
+    // "Give each file its own window": open in a fresh window unless this one is
+    // still empty. A new (empty) window then takes the file through this path.
+    if (Preferences::instance()->windowMode() == Preferences::WindowMode::Separate && m_tabs->count() > 0) {
+        auto *w = new MainWindow;
+        w->setAttribute(Qt::WA_DeleteOnClose);
+        w->show();
+        w->openFile(abs);
+        return;
     }
     auto *tab = new DocumentTab(abs, m_tabs);
     tab->setSidebar(DocumentTab::Sidebar(m_sidebarMode));
@@ -591,6 +791,106 @@ void MainWindow::dropEvent(QDropEvent *e)
 {
     for (const QUrl &url : e->mimeData()->urls())
         if (url.isLocalFile()) openFile(url.toLocalFile());
+}
+
+void MainWindow::showPreferences()
+{
+    if (!m_preferences) m_preferences = new PreferencesDialog(this);
+    m_preferences->show();
+    m_preferences->raise();
+    m_preferences->activateWindow();
+}
+
+void MainWindow::paintEvent(QPaintEvent *e)
+{
+    // The top of the chrome gradient (behind the transparent title bar on
+    // macOS); the toolbar paints the rest.
+    if (!m_toolBar || !m_toolBar->isVisible()) return QMainWindow::paintEvent(e);
+    const int top = m_toolBar->mapTo(this, QPoint(0, 0)).y();
+    if (top <= 0) return;
+    QPainter p(this);
+    AppStyle::paintTitleGradient(&p, QRect(0, 0, width(), top), 0, top + m_toolBar->height(), isActiveWindow());
+}
+
+bool MainWindow::handleChromeMouse(QEvent *e)
+{
+    // The transparent title bar and the toolbar are our widgets, so the
+    // system no longer drags the window by them: start the move ourselves
+    // (native, with snapping), and zoom on double-click.
+    if (e->type() != QEvent::MouseButtonPress && e->type() != QEvent::MouseButtonDblClick) return false;
+    auto *me = static_cast<QMouseEvent *>(e);
+    if (me->button() != Qt::LeftButton) return false;
+    if (e->type() == QEvent::MouseButtonDblClick) {
+        isMaximized() ? showNormal() : showMaximized();
+        return true;
+    }
+    QWindow *w = windowHandle();
+    if (w && w->startSystemMove()) return true;
+    // The first click after launch reaches us when AppKit no longer reports
+    // it as the current mouse-down, so the native move refuses it. Retry on
+    // the first drag event, else move the window by hand until release.
+    m_chromeDrag = true;
+    m_chromeDragRetry = true;
+    m_chromeDragOffset = me->globalPosition().toPoint() - pos();
+    grabMouse();
+    return true;
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent *e)
+{
+    if (!m_chromeDrag) return QMainWindow::mouseMoveEvent(e);
+    if (m_chromeDragRetry) {
+        m_chromeDragRetry = false;
+        if (QWindow *w = windowHandle(); w && w->startSystemMove()) {
+            m_chromeDrag = false;
+            releaseMouse();
+            return;
+        }
+    }
+    move(e->globalPosition().toPoint() - m_chromeDragOffset);
+}
+
+void MainWindow::mouseReleaseEvent(QMouseEvent *e)
+{
+    if (!m_chromeDrag) return QMainWindow::mouseReleaseEvent(e);
+    m_chromeDrag = false;
+    releaseMouse();
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *e)
+{
+    if (obj == m_toolBar && handleChromeMouse(e)) return true;
+    return QMainWindow::eventFilter(obj, e);
+}
+
+void MainWindow::mousePressEvent(QMouseEvent *e)
+{
+    // Presses reaching the window itself: the title strip, or anything a
+    // child ignored. Only the title strip and the status bar move it.
+    const bool chrome = (m_toolBar && e->position().y() < m_toolBar->geometry().top()) ||
+                        statusBar()->geometry().contains(e->position().toPoint());
+    if (!chrome || !handleChromeMouse(e)) QMainWindow::mousePressEvent(e);
+}
+
+void MainWindow::mouseDoubleClickEvent(QMouseEvent *e)
+{
+    const bool chrome = (m_toolBar && e->position().y() < m_toolBar->geometry().top()) ||
+                        statusBar()->geometry().contains(e->position().toPoint());
+    if (!chrome || !handleChromeMouse(e)) QMainWindow::mouseDoubleClickEvent(e);
+}
+
+void MainWindow::changeEvent(QEvent *e)
+{
+    // Chrome is lighter in inactive windows.
+    if (e->type() == QEvent::ActivationChange) {
+        update();
+        if (m_toolBar) {
+            m_toolBar->update();
+            for (QWidget *w : m_toolBar->findChildren<QWidget *>()) w->update();
+        }
+        statusBar()->update();
+    }
+    QMainWindow::changeEvent(e);
 }
 
 void MainWindow::closeEvent(QCloseEvent *e)

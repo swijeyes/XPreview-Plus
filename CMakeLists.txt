@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(XPreview VERSION 1.0.0 LANGUAGES C CXX)
+project(XPreview VERSION 1.2.0 LANGUAGES C CXX)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 set(APP_DISPLAY_NAME "XPreview+")
@@ -94,6 +94,10 @@ target_link_libraries(xpreview_core PUBLIC
 # UI widgets as a library so the UI regression tests can link them.
 add_library(xpreview_ui STATIC
     src/ui/MainWindow.cpp
+    src/ui/Appearance.cpp
+    src/ui/AppStyle.cpp
+    src/ui/PreferencesDialog.cpp
+    src/ui/Preferences.cpp
     src/ui/DocumentTab.cpp
     src/ui/DocumentView.cpp
     src/ui/RenderService.cpp
@@ -109,6 +113,13 @@ if(APPLE)
     if(EXISTS "${APP_ICON}")
         set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         list(APPEND APP_SOURCES "${APP_ICON}")
+    endif()
+    # Compiled Icon Composer asset (from icon/icon.icon). macOS 26 renders the
+    # app icon from this via CFBundleIconName; the .icns above is the fallback.
+    set(APP_ICON_ASSETS "${CMAKE_SOURCE_DIR}/resources/Assets.car")
+    if(EXISTS "${APP_ICON_ASSETS}")
+        set_source_files_properties("${APP_ICON_ASSETS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+        list(APPEND APP_SOURCES "${APP_ICON_ASSETS}")
     endif()
 endif()
 

@@ -32,12 +32,18 @@
 - **Export as PDF** works for every format:
   - PDFs are copied byte-for-byte, or re-saved losslessly if rotated.
   - Everything else becomes real vector pages with selectable, searchable text.
-- **Viewing:** continuous scrolling with fast tiled rendering; zoom, pinch-zoom,
-  fit width and fit page; rotation.
+- **Viewing:** fast tiled rendering; zoom, pinch-zoom, fit width and fit page;
+  rotation. PDFs can be shown as scrolling pages, one page at a time, or two
+  pages side by side, and 100% shows pages at their printed size.
 - **Text:** search with highlights, text selection and copy, clickable links,
   printing.
 - **Opening files:** tabs, recent files, drag-and-drop onto the window or the
-  Dock icon, Open With in Finder.
+  Dock icon, Open With in Finder. PDFs reopen on the page you were reading.
+- **Two looks:** a **Modern** flat theme in Light or Dark (the default), or a
+  **Classic** glossy look — classic scroll bars (both arrows together) and a
+  gradient toolbar and status bar, in **Blue** or **Gray**.
+- **Preferences** (⌘, / Edit → Preferences…): appearance, what 100% means for
+  PDFs, returning to the last page, and the initial page layout.
 - **Its own RTF and ODT renderer**, with no LibreOffice dependency. It handles:
   - fonts, with metric-compatible substitutes such as Calibri → Carlito
   - colours, highlights and lists
@@ -75,8 +81,10 @@ Each file has a `.sha256` checksum next to it.
 | Find / next / previous | ⌘F / ⌘G / ⇧⌘G | Ctrl+F / F3 / Shift+F3 |
 | Hide sidebar / Thumbnails / Table of contents | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 | Ctrl+Alt+1 / 2 / 3 |
 | Actual size / Zoom in / Zoom out / Fit page / Fit width | ⌘0 / ⌘+ / ⌘− / ⌘9 / ⌘8 | Ctrl+0 / + / − / 9 / 8 |
+| Previous / next page | ⌥⌘↑ / ⌥⌘↓ | Ctrl+Alt+Up / Down |
 | Rotate left / right | ⌘L / ⌘R | Ctrl+L / Ctrl+R |
 | Inspector | ⌘I | Ctrl+I |
+| Preferences | ⌘, | Edit → Preferences… |
 
 ## Building from source
 
@@ -107,12 +115,14 @@ on and newer. Build against the official Qt installer to support older systems.
 ### Windows (cross-compiled from macOS or Linux)
 
 ```sh
-brew install qtbase ninja cmake sevenzip   # host Qt tools must match the Windows Qt version
+brew install qtbase ninja cmake sevenzip
 scripts/package-windows.sh              # → release/XPreviewPlus-<version>-windows-x64-portable.zip
 ```
 
-`scripts/fetch-windows-deps.sh` downloads llvm-mingw and Qt for Windows
-(checksum-verified), plus PDFium and miniz. The packaging script checks that
+`scripts/fetch-windows-deps.sh` downloads Qt for Windows in the same version as
+the host Qt (whose moc and rcc the build uses; override with `QT_VER`), the
+llvm-mingw release that Qt was built with (all checksum-verified), plus PDFium
+and miniz. The packaging script checks that
 every DLL the binaries import is either bundled or part of Windows. Building
 natively on Windows with MSVC and the standard CMake flow also works.
 
@@ -176,7 +186,8 @@ src/image   raster and SVG backends
 src/flow    shared FlowModel, QTextDocument builder, paginated document
 src/rtf     RTF tokenizer + interpreter
 src/odf     ODF package reader, style resolver, ODT importer
-src/ui      main window, tabs, page view, async tile renderer, thumbnails
+src/ui      main window, tabs, page view, async tile renderer, thumbnails,
+            window style, appearance and preferences
 tests       unit/security tests, headless render tool, sample corpus
 scripts     dependency fetchers and macOS/Windows packaging
 manual      user manual (LaTeX source, figures, PDF)

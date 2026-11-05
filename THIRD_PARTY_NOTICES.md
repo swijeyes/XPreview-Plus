@@ -52,4 +52,4 @@ terms. Google's Gemini terms do not claim ownership of generated images.
 ## Not included
 
 PDFium is used instead of MuPDF (AGPL) or Poppler (GPL) by design (see
-`plan/`). LibreOffice is not used. No code from Apple's Preview is used.
+`plan/`). LibreOffice is not used. No code from other document viewers is used.

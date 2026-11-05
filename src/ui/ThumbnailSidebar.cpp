@@ -104,7 +104,7 @@ QVariant ThumbnailModel::data(const QModelIndex &index, int role) const
     if (!index.isValid()) return {};
     if (role == Qt::DisplayRole) return QString::number(index.row() + 1);
     if (role == Qt::DecorationRole && m_renderer) {
-        // Render at device resolution for crisp thumbnails on Retina.
+        // Render at device resolution for crisp thumbnails on high-DPI displays.
         const int px = qRound(m_width * qApp->devicePixelRatio());
         return m_renderer->thumbnail(index.row(), px);
     }
