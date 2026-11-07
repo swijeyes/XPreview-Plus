@@ -46,7 +46,7 @@
 
 \hypersetup{colorlinks=true, linkcolor=brand, urlcolor=brand,
   pdftitle={XPreview+ User Manual}, pdfauthor={Sanjeeva Wijeyesakere},
-  pdfsubject={User manual for XPreview+ 1.0}}
+  pdfsubject={User manual for XPreview+ 2.1}}
 
 \setlist{itemsep=2pt, topsep=4pt}
 \setlength{\parindent}{0pt}
@@ -69,7 +69,7 @@
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\sffamily XPreview+ 1.0 User Manual}
+\fancyhead[L]{\small\sffamily XPreview+ 2.1 User Manual}
 \fancyhead[R]{\small\sffamily\nouppercase{\leftmark}}
 \fancyfoot[C]{\small\sffamily\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
@@ -111,10 +111,10 @@
   \vspace{0.4cm}
   {\sffamily\Large User Manual\par}
   \vspace{0.3cm}
-  {\sffamily\large Version 1.0\par}
+  {\sffamily\large Version 2.1\par}
   \vspace{1.6cm}
   {\large A fast viewer for PDF documents, images, RTF and OpenDocument text,\\
-  with export of anything to PDF.\par}
+  with PDF form filling, page editing, and export of anything to PDF.\par}
   \vfill
   {\sffamily macOS \quad·\quad Windows \quad·\quad Linux\par}
   \vspace{0.6cm}
@@ -131,7 +131,8 @@
 
 \app{} is a document and image viewer in the spirit of a built-in document viewer. It opens a
 file almost instantly, shows it page by page, lets you search, select and copy
-text, and can turn any file it opens into a PDF. It runs on macOS and Windows, and can be built for Linux.
+text, and can turn any file it opens into a PDF. PDFs can also be edited: fill in their forms,
+and rearrange, rotate, delete and combine their pages. It runs on macOS and Windows, and can be built for Linux.
 
 \subsection{What \app{} can open}
 \begin{itemize}
@@ -147,6 +148,9 @@ text, and can turn any file it opens into a PDF. It runs on macOS and Windows, a
 \begin{itemize}
   \item \textbf{Page thumbnails} and a \textbf{table of contents} in the sidebar.
   \item \textbf{Export as PDF} for every file type.
+  \item \textbf{Fill in PDF forms}: text fields, check boxes, radio buttons and lists.
+  \item \textbf{Edit PDF pages}: drag thumbnails to reorder pages, drop other PDFs (or images and
+        documents) into the sidebar to combine files, and rotate, delete or insert pages.
   \item \textbf{Search} with highlighted results, \textbf{text selection} and \textbf{copy}.
   \item Smooth \textbf{zooming} (including trackpad pinch), \textbf{fit to width or page}, and \textbf{rotation}.
   \item \textbf{Tabs}, so several documents can be open in one window.
@@ -164,7 +168,7 @@ thumbnails in the sidebar.}
 \textbf{Requirements:} a Mac with Apple silicon (M-series) and a recent version of macOS.
 
 \begin{enumerate}
-  \item Download \file{XPreviewPlus-1.0-macos-arm64.dmg} from the project's
+  \item Download \file{XPreviewPlus-2.1-macos-arm64.dmg} from the project's
         \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
   \item Double-click the downloaded file to open it.
   \item Drag the \ui{\app} icon onto the \ui{Applications} folder shown next to it.
@@ -192,7 +196,7 @@ see Section~\ref{sec:settings}.
 \app{} for Windows is \emph{portable}. There is no installer, and it never writes to the
 Windows registry.
 \begin{enumerate}
-  \item Download \file{XPreviewPlus-1.0-windows-x64-portable.zip} from the
+  \item Download \file{XPreviewPlus-2.1-windows-x64-portable.zip} from the
         \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
   \item Right-click the zip file, choose \ui{Extract All\ldots}, and pick a folder,
         for example your \file{Documents} folder or a USB stick.
@@ -239,7 +243,8 @@ From left to right:
 \subsection{Sidebar}
 The sidebar shows either \textbf{page thumbnails} or the \textbf{table of contents}. Drag the
 thin divider between the sidebar and the page to make it wider or narrower; thumbnails grow
-and shrink with it.
+and shrink with it. For PDFs, the thumbnails are also where you rearrange and combine pages
+(Section~\ref{sec:pages}).
 
 \subsection{Page view}
 The main area shows the pages of your document one after another on a grey background. Scroll to move
@@ -253,7 +258,8 @@ choose \ui{Fit Width}, \ui{Fit Page} or a percentage from it, or type a value su
 
 \subsection{Information bar}
 For RTF and ODT documents that \app{} had to simplify, a yellow bar appears above the page
-(Section~\ref{sec:simplified}). Click the \ui{×} button on its right to dismiss it.
+(Section~\ref{sec:simplified}). For PDFs with fillable form fields, the bar says so
+(Section~\ref{sec:forms}). Click the \ui{×} button on its right to dismiss it.
 
 \subsection{Tabs}
 Each file you open gets its own tab. The tab bar appears as soon as two or more files are open.
@@ -282,8 +288,29 @@ To have a type of file always open in \app{} on macOS, select such a file in Fin
 \end{tip}
 
 \subsection{Password-protected PDFs}
-When a PDF is encrypted, \app{} asks for its password. If you cancel, the tab shows a message
-instead of the document; close it and open the file again to retry.
+When a PDF is encrypted, \app{} asks for its password. All standard PDF encryption is
+supported, from older RC4 files to AES-256. If the password is wrong, \app{} says so and asks
+again; each further try waits a little longer. If you cancel, the tab shows a message instead
+of the document; close it and open the file again to retry.
+
+Some PDFs open without a password but carry \textbf{restrictions} set by their owner: no
+printing, no copying, or no changes. \app{} honours them --- the yellow bar says what is
+restricted, and the matching commands are unavailable. Opening the file with its
+\emph{owner} password lifts the restrictions. Section~\ref{sec:protect} explains how to protect
+your own PDFs.
+
+\subsection{PostScript and EPS files}
+\app{} opens PostScript (\file{.ps}) and Encapsulated PostScript (\file{.eps}) files by turning
+them into a PDF with Ghostscript, which is included in the macOS app. EPS images are cropped to
+their bounding box. The converted document can be searched, copied and printed like a PDF;
+to keep it as a PDF, use \menu{File > Save As\ldots}. The original file is never changed.
+
+\begin{note}
+PostScript files are programs. Ghostscript runs them in a separate, locked-down process: it
+cannot use the network, start other programs, read your documents, or write anywhere except
+its own temporary folder, and it is stopped after a minute. On Windows, PostScript and EPS
+open if Ghostscript is installed.
+\end{note}
 
 \subsection{How \app{} recognises files}
 \app{} looks at a file's \emph{contents}, not just its name, to decide what it is. If a file's
@@ -405,7 +432,8 @@ is done.
 \subsection{What you get}
 \begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
   \item[PDF documents] An exact copy of the original file. If you rotated the view,
-        the copy is saved with that rotation.
+        the copy is saved with that rotation; if you filled in fields or edited pages, the
+        copy includes those changes.
   \item[RTF and ODT documents] Real PDF pages with sharp, selectable and searchable text, the
         same layout you see in \app{}, and the fonts embedded.
   \item[Images] A PDF page the size of the image, with the picture at full quality. SVG images
@@ -415,6 +443,130 @@ is done.
 \begin{note}
 Exports are written safely: the new PDF only replaces an existing file once it has been
 written completely, so a failed or interrupted export never leaves a broken file behind.
+\end{note}
+
+% ================================================================
+\section{Filling in PDF forms}\label{sec:forms}
+
+Many PDFs --- applications, tax forms, registration sheets --- contain \textbf{form fields}.
+\app{} shows these fields with a light blue tint, and a yellow bar above the page tells you
+that the document has fields to fill in.
+
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Text fields] Click the field and type. The pointer becomes a text cursor over a text
+        field. Use the arrow keys, \key{Backspace} and \key{Delete} as usual; drag or
+        double-click to select text. \key{Cmd}+\key{C}, \key{Cmd}+\key{X}, \key{Cmd}+\key{V},
+        \key{Cmd}+\key{A} and \key{Cmd}+\key{Z} work inside the field.
+  \item[Check boxes and radio buttons] Click to tick or untick. With the field selected,
+        \key{Space} toggles it too.
+  \item[Lists and pop-up menus] Click to open the list, then click a choice.
+\end{description}
+
+Press \key{Tab} to move to the next field on the page, and \key{Shift}+\key{Tab} to go back.
+Press \key{Esc}, or click anywhere outside the fields, to finish editing a field.
+
+\screenshot{window-form.png}{\linewidth}{A PDF form being filled in. Fields have a light
+blue tint.}
+
+When you have filled in the form, save it (Section~\ref{sec:saving}). The values are stored in
+the PDF itself, so any other PDF application shows them.
+
+\begin{note}
+\app{} never runs scripts in forms, so fields that calculate totals or check what you type in
+other applications do not do so in \app{}. Digital signature fields cannot be signed.
+\end{note}
+
+% ================================================================
+\section{Editing PDF pages}\label{sec:pages}
+
+The page thumbnails of a PDF are its pages: what you change there changes the document.
+Click a thumbnail to select a page; \key{Shift}-click to select a range, or \key{Cmd}-click
+(\key{Ctrl}-click on Windows and Linux) to add single pages. The commands below act on the
+selected pages --- or on the current page if no thumbnail is selected.
+
+\subsection{Rearranging pages}
+Drag one or more selected thumbnails up or down. A blue line shows where they will go; release
+the mouse button to move them there. Hold \key{Option} (\key{Alt}) while you drop to put a
+\emph{copy} of the pages there instead.
+
+\subsection{Combining PDFs}
+Drag a PDF from the Finder (or Explorer) onto the thumbnails. The blue line shows where its
+pages will be inserted; drop it, and all of its pages are added there. You can drop several
+files at once. Images, PostScript, EPS, RTF and ODT documents can be dropped too: they are turned
+into PDF pages first, exactly as \menu{File > Export as PDF} would.
+
+You can also drag thumbnails from one \app{} window into another to copy pages between
+documents, or choose \menu{Edit > Insert > Page from File\ldots} to pick files from a dialog.
+The new pages go after the selected page.
+
+\begin{tip}
+Dropping a file on the \emph{page view} (rather than the thumbnails) opens it in its own tab
+as usual.
+\end{tip}
+
+\subsection{Rotating, deleting and adding pages}
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Rotate] \menu{Tools > Rotate Page Left} or \menu{Rotate Page Right}
+        (\key{Shift}+\key{Cmd}+\key{L} / \key{Shift}+\key{Cmd}+\key{R}) turns the selected
+        pages and is saved with the document. (\menu{Rotate Left} and \menu{Rotate Right},
+        without ``Page'', only turn your view of the whole document.)
+  \item[Delete] Press \key{Delete} or \key{Backspace} in the thumbnails, or choose
+        \menu{Edit > Delete Page}. A PDF must keep at least one page.
+  \item[Blank page] \menu{Edit > Insert > Blank Page} adds an empty page, the same size as the
+        current one, after it.
+  \item[Export pages] \menu{Tools > Export Selected Pages\ldots} saves just the selected pages
+        as a new PDF.
+\end{description}
+All of these are also in the menu that appears when you right-click (or \key{Ctrl}-click) a
+thumbnail.
+
+\subsection{Undo}
+\menu{Edit > Undo} (\key{Cmd}+\key{Z}) takes back the last page change, and
+\menu{Edit > Redo} (\key{Shift}+\key{Cmd}+\key{Z}) puts it back. The menu names the change,
+for example \menu{Undo Move Page}. The last 20 page changes can be undone.
+
+\begin{note}
+When you combine PDFs, the pages you insert keep their look, but form fields on them can no
+longer be filled in. Fill in a form before combining it with other files.
+\end{note}
+
+% ================================================================
+\section{Saving your changes}\label{sec:saving}
+
+A PDF you have changed is marked as edited: on macOS the window title ends in
+``--- Edited'' and the close button shows a dot; on Windows and Linux the title has an
+asterisk. The tab of an edited document shows a dot (•) after its name.
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Save] \menu{File > Save} (\key{Cmd}+\key{S}) writes the changes into the PDF.
+  \item[Save As] \menu{File > Save As\ldots} (\key{Shift}+\key{Cmd}+\key{S}) writes them to a
+        new file and leaves the original as it was. The window then shows the new file.
+  \item[Export as PDF] also includes your changes, without changing which file is open.
+\end{description}
+If you close a tab or window, or quit, with unsaved changes, \app{} asks whether to save them.
+Like exports, saving is safe: the file is only replaced once the new version has been written
+completely.
+
+% ================================================================
+\section{Password protection}\label{sec:protect}
+
+Choose \menu{File > Password Protection\ldots} to protect a PDF. You can:
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Require a password to open it] Nobody can see the document without the password.
+  \item[Restrict printing, copying and changes] Others can open the PDF but not print it, copy
+        its text, or change its pages and forms. An \textbf{owner password}, which must differ
+        from the open password, lifts the restrictions.
+\end{description}
+The protection uses AES-256, the strongest encryption PDF offers, and takes effect when you
+save (\menu{File > Save} or \menu{Save As\ldots}). \menu{Export as PDF} applies it too.
+
+When you edit and save a PDF that was already protected, \app{} keeps its protection as it
+was. To change or remove it, open the PDF with its owner password (or its only password),
+choose \menu{File > Password Protection\ldots}, then \ui{OK} or \ui{Remove Protection}, and save.
+
+\begin{note}
+Keep your password safe: a PDF protected with a forgotten password cannot be opened, by
+\app{} or anyone else. Restrictions are honoured by PDF applications, but are not a
+substitute for an open password.
 \end{note}
 
 % ================================================================
@@ -444,7 +596,9 @@ that happens, a yellow bar says
   \item[Open in Default App] Opens the file in the application your computer normally uses for it.
   \item[Export as PDF\ldots] Saves the document as you see it.
 \end{description}
-\menu{File > Open in Default App} is also available for any file.
+\menu{File > Open in Default App} is also available for any file, except one whose name does not
+match its contents (for example a PDF named \file{.hta} or \file{.command}): your computer picks the
+application by the name, so such a file could run as a program instead of opening as a document.
 
 \subsection{Fonts}
 Documents often use fonts that are not installed on your computer. \app{} includes free fonts
@@ -474,7 +628,8 @@ A font that is installed on your computer is always used as is.
 \textbf{Type} & \textbf{Extensions} & \textbf{Notes} \\
 \midrule
 \endhead
-PDF & \file{.pdf} & Full support, including password-protected files, bookmarks and links. \\
+PDF & \file{.pdf} & Full support, including encrypted files (RC4 and AES), forms, bookmarks and links. \\
+PostScript, EPS & \file{.ps .eps .epsf .epsi} & Converted to PDF with the included Ghostscript (macOS); on Windows if Ghostscript is installed. \\
 PNG, JPEG, BMP & \file{.png .jpg .jpeg .bmp} & Rotation stored in photos (EXIF) is applied automatically. \\
 GIF, WebP & \file{.gif .webp} & Animated images show their first frame. \\
 TIFF & \file{.tif .tiff} & Multi-page TIFF files show all pages. \\
@@ -511,12 +666,18 @@ On macOS, \key{Cmd} is the Command key and \key{Option} is the Option (Alt) key.
 \multicolumn{3}{l}{\sffamily\bfseries File} \\
 Open & \key{Cmd}+\key{O} & \key{Ctrl}+\key{O} \\
 Close tab & \key{Cmd}+\key{W} & \key{Ctrl}+\key{W} \\
+Save (PDF) & \key{Cmd}+\key{S} & \key{Ctrl}+\key{S} \\
+Save As (PDF) & \key{Shift}+\key{Cmd}+\key{S} & \key{Ctrl}+\key{Shift}+\key{S} \\
 Export as PDF & \key{Shift}+\key{Cmd}+\key{E} & \key{Ctrl}+\key{Shift}+\key{E} \\
 Print & \key{Cmd}+\key{P} & \key{Ctrl}+\key{P} \\
 Quit & \key{Cmd}+\key{Q} & \key{Ctrl}+\key{Q} on Linux; close the window on Windows \\
 \midrule
 \multicolumn{3}{l}{\sffamily\bfseries Edit} \\
+Undo / redo & \key{Cmd}+\key{Z} / \key{Shift}+\key{Cmd}+\key{Z} & \key{Ctrl}+\key{Z} / \key{Ctrl}+\key{Y} \\
 Copy & \key{Cmd}+\key{C} & \key{Ctrl}+\key{C} \\
+Insert page from file & \key{Option}+\key{Cmd}+\key{I} & \key{Ctrl}+\key{Alt}+\key{I} \\
+Insert blank page & \key{Shift}+\key{Cmd}+\key{N} & \key{Ctrl}+\key{Shift}+\key{N} \\
+Delete selected pages & \key{Delete} in the thumbnails & \key{Delete} in the thumbnails \\
 Find & \key{Cmd}+\key{F} & \key{Ctrl}+\key{F} \\
 Find next & \key{Cmd}+\key{G} & \key{F3} or \key{Ctrl}+\key{G} \\
 Find previous & \key{Shift}+\key{Cmd}+\key{G} & \key{Shift}+\key{F3} or \key{Ctrl}+\key{Shift}+\key{G} \\
@@ -538,6 +699,7 @@ Go to page & \key{Option}+\key{Cmd}+\key{G} & \key{Ctrl}+\key{Alt}+\key{G} \\
 \midrule
 \multicolumn{3}{l}{\sffamily\bfseries Tools} \\
 Rotate left / right & \key{Cmd}+\key{L} / \key{Cmd}+\key{R} & \key{Ctrl}+\key{L} / \key{Ctrl}+\key{R} \\
+Rotate page left / right & \key{Shift}+\key{Cmd}+\key{L} / \key{R} & \key{Ctrl}+\key{Shift}+\key{L} / \key{R} \\
 Show Inspector & \key{Cmd}+\key{I} & \key{Ctrl}+\key{I} \\
 \midrule
 \multicolumn{3}{l}{\sffamily\bfseries In the page view} \\
@@ -558,7 +720,10 @@ Open \app{}'s preferences with \key{Cmd}+\key{,} on macOS, or from \menu{Edit > 
 Windows and Linux. Changes take effect immediately. The window has three tabs:
 \begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
   \item[General] the window's look --- a \textbf{Modern} flat theme in Light, Dark or Automatic
-        (Light is the default), or a \textbf{Classic} glossy look in Blue or Gray; the scroll-bar
+        (Light is the default), or a \textbf{Classic} glossy look in Blue or Gray. For Modern,
+        \ui{Dark style} chooses how it looks when dark: neutral \textbf{Graphite}, or
+        \textbf{Dracula}, with the purple-grey colours of the popular Dracula theme
+        (Figure~\ref{fig:window-dracula.png}); the scroll-bar
         style when using the Modern theme; and whether opening several files keeps them together in
         one window or gives each file its own window.
   \item[PDF] what Actual Size (100\%) shows --- pages at their printed size, or one PDF point per
@@ -573,7 +738,8 @@ Separately from the settings above, \app{} remembers:
 \begin{itemize}
   \item the list of recently opened files,
   \item the sidebar mode (hidden, thumbnails or table of contents),
-  \item the window's size and position,
+  \item the window's size and position (saved as soon as you move or resize it, and
+        used for the next window you open),
   \item the folder you last opened a file from.
 \end{itemize}
 These are stored in:
@@ -586,6 +752,8 @@ These are stored in:
 To reset \app{}, quit it and delete that file. On macOS you can instead run
 \texttt{defaults delete org.xpreview.XPreview} in Terminal.
 
+\screenshot{window-dracula.png}{\linewidth}{The Modern look with the Dracula dark style.}
+
 \subsection{Privacy and safety}
 \begin{itemize}
   \item \app{} never connects to the internet by itself. It contains no analytics, no update
@@ -593,12 +761,16 @@ To reset \app{}, quit it and delete that file. On macOS you can instead run
   \item Documents cannot make \app{} load anything from the internet or from elsewhere on
         your computer. For example, pictures referenced by an SVG or ODT file but stored
         outside it are not loaded.
-  \item Macros and scripts in documents are never run.
+  \item Macros and scripts in documents are never run, including JavaScript in PDF forms.
+  \item PostScript and EPS files are converted by Ghostscript in a sandbox with no network,
+        no access to your files, and a time limit.
+  \item Passwords you type are not stored or remembered.
   \item Links only open when you click them, and only web and e-mail links.
   \item Every file is treated as potentially hostile. Damaged or deliberately malformed files
         are handled safely and size limits stop them from exhausting memory. Such
         a file shows an error message instead of crashing the application.
-  \item Exporting never changes the original file.
+  \item Exporting never changes the original file, and edits to a PDF only reach its file
+        when you save.
 \end{itemize}
 
 % ================================================================
@@ -620,7 +792,7 @@ To reset \app{}, quit it and delete that file. On macOS you can instead run
         \app{} limits very large or deeply nested files to stay safe and responsive. For
         example, images may be at most 30\,000 pixels wide or high.
   \item[A spreadsheet or presentation does not open]
-        OpenDocument spreadsheets and presentations are not supported in version 1.0.
+        OpenDocument spreadsheets and presentations are not supported yet.
   \item[HEIC photos do not open on Windows]
         HEIC and JPEG 2000 images are only supported on macOS.
   \item[Something else is wrong]

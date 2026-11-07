@@ -29,13 +29,25 @@ run_tests env QT_QPA_PLATFORM=offscreen build-release/xpreview-tests
 run_tests build-release/xpreview-ui-tests -platform offscreen
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+# KEEP_STAGE=1 keeps the staged bundle for debugging.
+if [[ -n "${KEEP_STAGE:-}" ]]; then trap 'echo "staged in $STAGE" >&2' EXIT; else trap 'rm -rf "$STAGE"' EXIT; fi
 APP="$STAGE/$NAME.app"
 cp -R "build-release/$NAME.app" "$APP"
 
+# Ghostscript (PostScript/EPS -> PDF) runs as a helper program with its own
+# resource files; src/ps/PostScriptConverter.cpp looks for exactly these paths.
+GS_PREFIX="$(brew --prefix ghostscript)"
+mkdir -p "$APP/Contents/Helpers" "$APP/Contents/Resources/ghostscript"
+cp "$GS_PREFIX/bin/gs" "$APP/Contents/Helpers/gs"
+chmod 755 "$APP/Contents/Helpers/gs"
+for d in Resource lib fonts iccprofiles; do
+  cp -R "$GS_PREFIX/share/ghostscript/$d" "$APP/Contents/Resources/ghostscript/"
+done
+
 # Bundle Qt frameworks + plugins (image formats incl. WebP/TIFF/HEIC, SVG,
-# print support) and rewrite install names.
-"$(brew --prefix)/bin/macdeployqt" "$APP" -always-overwrite -libpath="$PWD/third_party/pdfium/lib"
+# print support), qpdf, and Ghostscript's libraries, and rewrite install names.
+"$(brew --prefix)/bin/macdeployqt" "$APP" -always-overwrite -libpath="$PWD/third_party/pdfium/lib" \
+  -executable="$APP/Contents/Helpers/gs"
 
 # macdeployqt leaves some copied dylibs with their Homebrew install-name id.
 for lib in "$APP"/Contents/Frameworks/*.dylib; do
@@ -44,6 +56,8 @@ for lib in "$APP"/Contents/Frameworks/*.dylib; do
     install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null
   fi
 done
+# Libraries macdeployqt copied for Ghostscript load each other through @rpath.
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/Helpers/gs"
 # License texts of everything bundled (LGPL/BSD/MIT require them with
 # binaries): ours, then each Homebrew package macdeployqt copied in.
 LIC="$APP/Contents/Resources/licenses"
@@ -59,6 +73,8 @@ for lib in "$APP"/Contents/Frameworks/*.dylib; do
   find "$(brew --prefix)/opt/$keg/" -maxdepth 1 -type f \( -iname 'licen*' -o -iname 'copying*' -o -iname 'notice*' \) \
     -exec cp {} "$LIC/$keg/" \;
 done
+# Ghostscript is a program, not a dylib, so its license is copied by hand.
+mkdir -p "$LIC/ghostscript" && cp "$GS_PREFIX/LICENSE" "$LIC/ghostscript/"
 # glib's keg ships no license file; it is LGPL-2.1-or-later.
 [[ -d "$LIC/glib" ]] && cp licenses/LGPL-2.1.txt "$LIC/glib/"
 
@@ -87,12 +103,22 @@ PLIST
 fi
 find "$APP/Contents" \( -name '*.dylib' -o -name '*.framework' \) -print0 | sort -rz |
   xargs -0 -n1 codesign --force --options runtime --timestamp=none --sign "$SIGN_ID"
+# Helper programs load the same bundled libraries, so they get the same rules.
+for helper in "$APP"/Contents/Helpers/*; do
+  codesign --force --options runtime --timestamp=none "${ENT_ARGS[@]}" --sign "$SIGN_ID" "$helper"
+done
 codesign --force --options runtime --timestamp=none "${ENT_ARGS[@]}" --sign "$SIGN_ID" "$APP"
 codesign --verify --deep --strict "$APP"
 # The signed bundle must actually launch (catches signing/loader problems).
 if ! "$APP/Contents/MacOS/$NAME" --screenshot "$STAGE/smoke.png" "$PWD/tests/corpus/rich.fodt" \
     2>/dev/null | grep -q "Page 1 of"; then
   echo "error: signed app failed its launch smoke test" >&2
+  exit 1
+fi
+# ...and convert EPS with the bundled, sandboxed Ghostscript.
+if ! "$APP/Contents/MacOS/$NAME" --screenshot "$STAGE/smoke-eps.png" "$PWD/tests/corpus/sample.eps" \
+    2>/dev/null | grep -q "EPS image"; then
+  echo "error: signed app could not open EPS with the bundled Ghostscript" >&2
   exit 1
 fi
 

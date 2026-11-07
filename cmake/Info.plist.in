@@ -42,6 +42,16 @@
             </array>
         </dict>
         <dict>
+            <key>CFBundleTypeName</key><string>PostScript Document</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.adobe.postscript</string>
+                <string>com.adobe.encapsulated-postscript</string>
+            </array>
+        </dict>
+        <dict>
             <key>CFBundleTypeName</key><string>Rich Text Document</string>
             <key>CFBundleTypeRole</key><string>Viewer</string>
             <key>LSHandlerRank</key><string>Alternate</string>

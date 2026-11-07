@@ -14,7 +14,8 @@ QT_HOST="${QT_HOST_PATH:-$(brew --prefix 2>/dev/null || echo /usr)}"
 ./scripts/fetch-windows-deps.sh
 cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-x64.cmake \
-      -DQT_HOST_PATH="$QT_HOST" -DCMAKE_PREFIX_PATH="$W/qt" -DPDFIUM_DIR="$W/pdfium"
+      -DQT_HOST_PATH="$QT_HOST" -DCMAKE_PREFIX_PATH="$W/qt" -DPDFIUM_DIR="$W/pdfium" \
+      ${CMAKE_EXTRA_ARGS:-}
 cmake --build build-win --target XPreview
 
 NAME="$(sed -n 's/^set(APP_DISPLAY_NAME "\(.*\)")/\1/p' CMakeLists.txt)"

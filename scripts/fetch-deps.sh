@@ -18,11 +18,27 @@ if [[ -z "$platform" ]]; then
   esac
 fi
 
-if [[ ! -f third_party/pdfium/include/fpdfview.h ]]; then
-  echo "Fetching PDFium ($platform)..."
-  mkdir -p third_party/pdfium
-  curl -fsSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-$platform.tgz" \
-    | tar xz -C third_party/pdfium
+# pdfium-binaries tag chromium/<build>, pinned and checksummed (the SHA-256
+# values are the ones GitHub lists for the release assets). A different
+# build in third_party/pdfium is replaced.
+PDFIUM_BUILD=8138
+case "$platform" in
+  mac-arm64) PDFIUM_SHA256=21a1567b397b571f4f77f21ca91eac7b892774219c3c715a5127a20950ccb18b ;;
+  mac-x64) PDFIUM_SHA256=72662ac8eff7bf5381ef82ceebd0a0ad5bddb051b303981115114e6972fd201c ;;
+  linux-x64) PDFIUM_SHA256=d6b1e28950a0392590d79bbdbb7eb19686872b688f8a36f170acb19e41473113 ;;
+  linux-arm64) PDFIUM_SHA256=c70b1ce4d13257f741af19e0aeee575890875995eb81370a65be942e601a1862 ;;
+  win-x64) PDFIUM_SHA256=8d48973e3eb472dda0f5f2435e595ac043f9f2219dd71883392f549445afa8a5 ;;
+  *) echo "error: no PDFium checksum for $platform" >&2; exit 1 ;;
+esac
+if [[ "$(sed -n 's/^BUILD=//p' third_party/pdfium/VERSION 2>/dev/null)" != "$PDFIUM_BUILD" ]]; then
+  echo "Fetching PDFium $PDFIUM_BUILD ($platform)..."
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$PDFIUM_BUILD/pdfium-$platform.tgz" \
+    -o "$tmp/pdfium.tgz"
+  echo "$PDFIUM_SHA256  $tmp/pdfium.tgz" | shasum -a 256 -c - >/dev/null || { echo "error: PDFium checksum mismatch" >&2; exit 1; }
+  rm -rf third_party/pdfium && mkdir -p third_party/pdfium
+  tar xzf "$tmp/pdfium.tgz" -C third_party/pdfium
+  rm -rf "$tmp"
 fi
 if [[ "$(uname -s)" == Darwin ]]; then
   # The prebuilt dylib has install name "./libpdfium.dylib"; make it

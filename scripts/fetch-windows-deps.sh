@@ -12,7 +12,10 @@ cd "$(dirname "$0")/.."
 
 QT_VER="${QT_VER:-$(qmake -query QT_VERSION 2>/dev/null || qmake6 -query QT_VERSION)}"
 MINIZ_VER="${MINIZ_VER:-3.1.0}"
-PDFIUM_BUILD="${PDFIUM_BUILD:-8125}"   # pdfium-binaries tag chromium/<build>; pinned so builds are repeatable
+PDFIUM_BUILD="${PDFIUM_BUILD:-8138}"   # pdfium-binaries tag chromium/<build>; pinned so builds are repeatable
+# SHA-256 of that build's pdfium-win-x64.tgz (as listed by GitHub); set both
+# when overriding the build.
+PDFIUM_SHA256="${PDFIUM_SHA256:-8d48973e3eb472dda0f5f2435e595ac043f9f2219dd71883392f549445afa8a5}"
 DEST=third_party/windows
 mkdir -p "$DEST" && cd "$DEST"
 
@@ -83,11 +86,12 @@ if [[ ! -f qt/bin/Qt6Core.dll ]]; then
 fi
 rm -f Updates.xml qt-archives.txt
 
-if [[ ! -f pdfium/bin/pdfium.dll ]]; then
-  echo "Fetching PDFium (win-x64)..."
-  mkdir -p pdfium
+if [[ ! -f pdfium/bin/pdfium.dll || "$(sed -n 's/^BUILD=//p' pdfium/VERSION 2>/dev/null)" != "$PDFIUM_BUILD" ]]; then
+  echo "Fetching PDFium $PDFIUM_BUILD (win-x64)..."
   curl -fsSL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$PDFIUM_BUILD/pdfium-win-x64.tgz" \
-    | tar xz -C pdfium
+    -o pdfium.tgz
+  echo "$PDFIUM_SHA256  pdfium.tgz" | shasum -a 256 -c - >/dev/null || { echo "error: PDFium checksum mismatch" >&2; exit 1; }
+  rm -rf pdfium && mkdir -p pdfium && tar xzf pdfium.tgz -C pdfium && rm pdfium.tgz
 fi
 
 if [[ ! -f miniz/miniz.c ]]; then
