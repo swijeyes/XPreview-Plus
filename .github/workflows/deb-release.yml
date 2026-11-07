@@ -1,0 +1,257 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Builds a .deb package for Debian and Ubuntu (amd64), checks that it installs
+# and starts on clean Ubuntu 22.04/24.04 and Debian 12/13 systems, and keeps it
+# as a workflow artifact. With a release tag it is also attached to that
+# existing GitHub Release. Run it by hand: Actions > Debian package > Run
+# workflow.
+#
+# Qt 6.11 is included in the package (in /opt/xpreview-plus), because these
+# distributions ship Qt older than the 6.5 XPreview+ needs. Everything else
+# comes from the system, as package dependencies worked out by dpkg-shlibdeps.
+# Install with:  sudo apt install ./xpreview-plus_<version>-1_amd64.deb
+name: Debian package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the .deb to (empty = build only)
+        required: false
+        default: v2.1
+
+permissions:
+  contents: write
+
+env:
+  # Downloaded tools are pinned and checked; the SHA-256 values are the ones
+  # GitHub lists for the release assets.
+  MINIZ_VER: 3.1.0
+  MINIZ_SHA256: f9d3e769ec5fd5583955a3c22eea457fe806be0d507805966d1a5b0410c77dda
+  LINUXDEPLOY_TAG: 1-alpha-20251107-1
+  LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+  # The Qt plugin only publishes a rolling "continuous" build: this is the one
+  # of 2026-08-22. If it is replaced, the check fails; take the new value from
+  # https://api.github.com/repos/linuxdeploy/linuxdeploy-plugin-qt/releases/tags/continuous
+  LINUXDEPLOY_QT_SHA256: cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617
+  # linuxdeploy is itself an AppImage; this runs it without FUSE.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+  PKG: xpreview-plus
+  PREFIX: /opt/xpreview-plus
+
+jobs:
+  build:
+    # The oldest supported system: the package needs glibc 2.35 or newer.
+    runs-on: ubuntu-22.04
+    outputs:
+      deb: ${{ steps.package.outputs.deb }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Files uploaded through the GitHub website lose their execute bit.
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      # g++-12: Ubuntu 22.04's default g++ 11 lacks -ftrivial-auto-var-init.
+      # The xcb libraries are what Qt's X11 platform plugin loads. Ghostscript
+      # lets the PostScript tests run.
+      - name: Install build tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++-12 unzip file imagemagick ghostscript \
+            dpkg-dev lintian desktop-file-utils \
+            libgl1-mesa-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libdbus-1-3
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.2'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtimageformats
+          cache: true
+
+      - name: Fetch PDFium, fonts and miniz
+        run: |
+          scripts/fetch-deps.sh
+          curl -fsSL -o miniz.zip "https://github.com/richgel999/miniz/releases/download/$MINIZ_VER/miniz-$MINIZ_VER.zip"
+          echo "$MINIZ_SHA256  miniz.zip" | sha256sum -c -
+          mkdir -p third_party/windows/miniz
+          unzip -qo miniz.zip -d third_party/windows/miniz
+          rm miniz.zip
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --build build
+
+      # Unit, security and UI layout tests (headless), as before every release.
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+
+      # linuxdeploy gathers Qt, its plugins and the libraries distributions
+      # may lack into AppDir/usr, and points the binaries at them; that tree
+      # becomes /opt/xpreview-plus.
+      - name: Collect Qt and libraries
+        run: |
+          DESTDIR="$PWD/AppDir" cmake --install build
+          convert resources/icon-1024.png -resize 512x512 xpreview-plus.png
+          sed -e 's/^Exec=.*/Exec=xpreview-plus %F/' packaging/linux/xpreview.desktop > xpreview-plus.desktop
+          grep -q '^Icon=' xpreview-plus.desktop || echo 'Icon=xpreview-plus' >> xpreview-plus.desktop
+          desktop-file-validate xpreview-plus.desktop
+
+          mkdir -p tools
+          curl -fsSL -o tools/linuxdeploy-x86_64.AppImage \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_TAG/linuxdeploy-x86_64.AppImage"
+          curl -fsSL -o tools/linuxdeploy-plugin-qt-x86_64.AppImage \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          echo "$LINUXDEPLOY_SHA256  tools/linuxdeploy-x86_64.AppImage" | sha256sum -c -
+          echo "$LINUXDEPLOY_QT_SHA256  tools/linuxdeploy-plugin-qt-x86_64.AppImage" | sha256sum -c -
+          chmod +x tools/*.AppImage
+
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          export PATH="$PWD/tools:$PATH"
+          # X11 (also used under Wayland via XWayland), plus the headless
+          # platform for the install check.
+          export EXTRA_PLATFORM_PLUGINS="libqoffscreen.so"
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --executable "AppDir/usr/bin/XPreview+" --desktop-file xpreview-plus.desktop \
+            --icon-file xpreview-plus.png --plugin qt
+
+      - name: Build the package
+        id: package
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          VERSION="$(sed -n 's/^project(XPreview VERSION \([0-9]*\.[0-9]*\).*/\1/p' CMakeLists.txt)"
+          DEB="${PKG}_${VERSION}-1_amd64.deb"
+          ROOT="$PWD/pkgroot"
+          mkdir -p "$ROOT$PREFIX" "$ROOT/usr/bin" "$ROOT/usr/share/applications" "$ROOT/usr/share/doc/$PKG" "$ROOT/DEBIAN"
+
+          # The app and everything it ships with.
+          cp -a AppDir/usr/. "$ROOT$PREFIX/"
+          rm -rf "$ROOT$PREFIX/share/applications" "$ROOT$PREFIX/share/icons"
+          # The C++ runtime comes from the system (a dependency): an older
+          # bundled copy would break newer system libraries such as GPU drivers.
+          rm -f "$ROOT$PREFIX"/lib/libstdc++.so* "$ROOT$PREFIX"/lib/libgcc_s.so*
+          ln -s "$PREFIX/bin/XPreview+" "$ROOT/usr/bin/$PKG"
+
+          # Menu entry and icons, where desktops look for them. dpkg triggers
+          # refresh the menu and icon caches; no install scripts are needed.
+          cp xpreview-plus.desktop "$ROOT/usr/share/applications/"
+          for size in 48 64 128 256 512; do
+            dir="$ROOT/usr/share/icons/hicolor/${size}x${size}/apps"
+            mkdir -p "$dir"
+            convert resources/icon-1024.png -resize "${size}x${size}" "$dir/$PKG.png"
+          done
+
+          # Licence and documentation.
+          cp LICENSE "$ROOT/usr/share/doc/$PKG/copyright"
+          cp THIRD_PARTY_NOTICES.md manual/xpreview-plus-manual.pdf "$ROOT/usr/share/doc/$PKG/"
+          cp -R licenses "$ROOT/usr/share/doc/$PKG/"
+
+          # Dependencies on system libraries, from what the binaries link to.
+          # Libraries in the package itself are not dependencies.
+          mkdir -p shlibs/debian
+          printf 'Source: %s\n\nPackage: %s\nArchitecture: amd64\n' "$PKG" "$PKG" > shlibs/debian/control
+          mapfile -t elf < <(find "$ROOT$PREFIX" -type f -exec sh -c 'file -b "$1" | grep -q "^ELF"' _ {} \; -print)
+          DEPENDS="$(cd shlibs && dpkg-shlibdeps -O --ignore-missing-info -l"$ROOT$PREFIX/lib" "${elf[@]}" \
+            | sed -n 's/^shlibs:Depends=//p')"
+          [[ -n "$DEPENDS" ]] || { echo "error: dpkg-shlibdeps found no dependencies" >&2; exit 1; }
+          echo "Depends: $DEPENDS"
+
+          find "$ROOT" -type d -exec chmod 755 {} +
+          cat > "$ROOT/DEBIAN/control" <<EOF
+          Package: $PKG
+          Version: $VERSION-1
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Depends: $DEPENDS
+          Recommends: ghostscript
+          Installed-Size: $(du -sk --exclude=DEBIAN "$ROOT" | cut -f1)
+          Maintainer: Sanjeeva Wijeyesakere <$OWNER@users.noreply.github.com>
+          Homepage: https://github.com/$REPO
+          Description: Fast, private viewer for PDF, PostScript, images, RTF and ODT
+           XPreview+ opens PDF documents, PostScript and EPS, images (PNG, JPEG,
+           GIF, WebP, TIFF, BMP, SVG), RTF and OpenDocument text, and exports
+           anything it opens to PDF. It fills in PDF forms and edits PDF pages:
+           reorder, rotate, delete, insert and combine. It never connects to the
+           internet. PostScript and EPS need Ghostscript.
+          EOF
+
+          mkdir -p release
+          dpkg-deb --root-owner-group -Zxz --build "$ROOT" "release/$DEB"
+          dpkg-deb --info "release/$DEB"
+          # Packaging advice only; a third-party package in /opt draws some.
+          lintian --no-tag-display-limit "release/$DEB" || true
+          (cd release && sha256sum "$DEB" | tee "$DEB.sha256")
+          echo "deb=$DEB" >> "$GITHUB_OUTPUT"
+
+      - name: Keep as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: release/*.deb*
+
+  # Each system starts clean, so a missing dependency shows up here.
+  install-check:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'debian:12', 'debian:13']
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: tests/corpus
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+
+      # apt installs the declared dependencies, and the recommended
+      # Ghostscript, as it would for a user.
+      - name: Install the package
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y "./${{ needs.build.outputs.deb }}"
+
+      - name: Launch check
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          command -v xpreview-plus
+          xpreview-plus --screenshot smoke.png "$PWD/tests/corpus/rich.fodt" | tee smoke.txt
+          grep -q "Page 1 of" smoke.txt
+          xpreview-plus --screenshot smoke-eps.png "$PWD/tests/corpus/sample.eps" | tee smoke-eps.txt
+          grep -q "EPS image" smoke-eps.txt
+
+      - name: Remove the package
+        run: apt-get remove -y ${{ env.PKG }} && test ! -e /opt/xpreview-plus/bin
+
+  release:
+    needs: [build, install-check]
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          DEB: ${{ needs.build.outputs.deb }}
+        run: gh release upload "$TAG" "$DEB" "$DEB.sha256" --clobber --repo "${{ github.repository }}"
