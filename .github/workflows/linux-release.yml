@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Builds the Linux x86_64 AppImage, runs the tests and a launch check, and
+# keeps it as a workflow artifact. With a release tag it is also attached to
+# that existing GitHub Release. Run it by hand: Actions > Linux release > Run
+# workflow. Built on Ubuntu 22.04, so it runs on distributions with glibc 2.35
+# or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+).
+name: Linux release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the AppImage to (empty = build only)
+        required: false
+        default: v2.1
+
+permissions:
+  contents: write
+
+env:
+  # Downloaded tools are pinned and checked; the SHA-256 values are the ones
+  # GitHub lists for the release assets.
+  MINIZ_VER: 3.1.0
+  MINIZ_SHA256: f9d3e769ec5fd5583955a3c22eea457fe806be0d507805966d1a5b0410c77dda
+  LINUXDEPLOY_TAG: 1-alpha-20251107-1
+  LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+  # The Qt plugin only publishes a rolling "continuous" build: this is the one
+  # of 2026-08-22. If it is replaced, the check fails; take the new value from
+  # https://api.github.com/repos/linuxdeploy/linuxdeploy-plugin-qt/releases/tags/continuous
+  LINUXDEPLOY_QT_SHA256: cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617
+  # linuxdeploy is itself an AppImage; this runs it without FUSE.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Files uploaded through the GitHub website lose their execute bit.
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      # g++-12: Ubuntu 22.04's default g++ 11 lacks -ftrivial-auto-var-init.
+      # The xcb libraries are what Qt's X11 platform plugin loads; linuxdeploy
+      # bundles the ones distributions may not have. Ghostscript lets the
+      # PostScript tests run.
+      - name: Install build tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++-12 unzip file imagemagick ghostscript \
+            libgl1-mesa-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libdbus-1-3
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.2'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtimageformats
+          cache: true
+
+      - name: Fetch PDFium, fonts and miniz
+        run: |
+          scripts/fetch-deps.sh
+          curl -fsSL -o miniz.zip "https://github.com/richgel999/miniz/releases/download/$MINIZ_VER/miniz-$MINIZ_VER.zip"
+          echo "$MINIZ_SHA256  miniz.zip" | sha256sum -c -
+          mkdir -p third_party/windows/miniz
+          unzip -qo miniz.zip -d third_party/windows/miniz
+          rm miniz.zip
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --build build
+
+      # Unit, security and UI layout tests (headless), as before every release.
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package the AppImage
+        run: |
+          VERSION="$(sed -n 's/^project(XPreview VERSION \([0-9]*\.[0-9]*\).*/\1/p' CMakeLists.txt)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          DESTDIR="$PWD/AppDir" cmake --install build
+          # AppImages need a desktop entry with an icon.
+          ICON=AppDir/usr/share/icons/hicolor/512x512/apps/xpreview.png
+          mkdir -p "$(dirname "$ICON")"
+          convert resources/icon-1024.png -resize 512x512 "$ICON"
+          DESKTOP=AppDir/usr/share/applications/xpreview.desktop
+          grep -q '^Icon=' "$DESKTOP" || echo 'Icon=xpreview' >> "$DESKTOP"
+          cp manual/xpreview-plus-manual.pdf AppDir/usr/share/doc/xpreview/
+
+          mkdir -p tools
+          curl -fsSL -o tools/linuxdeploy-x86_64.AppImage \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_TAG/linuxdeploy-x86_64.AppImage"
+          curl -fsSL -o tools/linuxdeploy-plugin-qt-x86_64.AppImage \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          echo "$LINUXDEPLOY_SHA256  tools/linuxdeploy-x86_64.AppImage" | sha256sum -c -
+          echo "$LINUXDEPLOY_QT_SHA256  tools/linuxdeploy-plugin-qt-x86_64.AppImage" | sha256sum -c -
+          chmod +x tools/*.AppImage
+
+          # "+" is avoided in file names: GitHub rewrites it in release asset names.
+          export LDAI_OUTPUT="XPreviewPlus-$VERSION-linux-x86_64.AppImage"
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          # X11 (also used under Wayland via XWayland), plus the headless
+          # platform for the launch check below.
+          export EXTRA_PLATFORM_PLUGINS="libqoffscreen.so"
+          export PATH="$PWD/tools:$PATH"
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --executable "AppDir/usr/bin/XPreview+" --desktop-file "$DESKTOP" --icon-file "$ICON" \
+            --plugin qt --output appimage
+
+          mkdir -p release
+          mv "$LDAI_OUTPUT" release/
+          (cd release && sha256sum "$LDAI_OUTPUT" | tee "$LDAI_OUTPUT.sha256")
+
+      # The packaged app must start and open documents on its own (catches
+      # missing libraries or plugins), including EPS through the system's
+      # Ghostscript.
+      - name: Launch check
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # Only what is inside the AppImage: not the build machine's Qt.
+          unset QT_PLUGIN_PATH QML2_IMPORT_PATH LD_LIBRARY_PATH
+          APP="release/XPreviewPlus-$VERSION-linux-x86_64.AppImage"
+          "$APP" --screenshot smoke.png "$PWD/tests/corpus/rich.fodt" | tee smoke.txt
+          grep -q "Page 1 of" smoke.txt
+          "$APP" --screenshot smoke-eps.png "$PWD/tests/corpus/sample.eps" | tee smoke-eps.txt
+          grep -q "EPS image" smoke-eps.txt
+
+      - name: Keep as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XPreviewPlus-${{ env.VERSION }}-linux-x86_64
+          path: release/XPreviewPlus-*-linux-x86_64.AppImage*
+
+      - name: Attach to the release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" release/XPreviewPlus-*-linux-x86_64.AppImage release/XPreviewPlus-*-linux-x86_64.AppImage.sha256 --clobber
