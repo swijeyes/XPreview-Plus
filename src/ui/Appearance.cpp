@@ -14,10 +14,61 @@ namespace {
 const QString kKindKey = QStringLiteral("appearance/kind");
 const QString kColorKey = QStringLiteral("appearance/color");
 const QString kModeKey = QStringLiteral("appearance/mode");
+const QString kDarkStyleKey = QStringLiteral("appearance/darkStyle");
+
+// Dracula (https://draculatheme.com): background, current line, foreground,
+// comment, and the purple, cyan and pink accents. Chrome and the page area
+// use the darker shades of Dracula's own UI ports.
+namespace dracula {
+const QColor background(0x28, 0x2a, 0x36);
+const QColor currentLine(0x44, 0x47, 0x5a);
+const QColor foreground(0xf8, 0xf8, 0xf2);
+const QColor comment(0x62, 0x72, 0xa4);
+const QColor purple(0xbd, 0x93, 0xf9);
+const QColor cyan(0x8b, 0xe9, 0xfd);
+const QColor chrome(0x21, 0x22, 0x2c);
+const QColor deep(0x19, 0x1a, 0x21);
+const QColor raised(0x34, 0x37, 0x46);
+}  // namespace dracula
 const QString kLegacyThemeKey = QStringLiteral("appearance/theme");
 
 // A full flat palette, built from one background, surface, text and accent so
 // every widget follows the Modern look. Values mirror XTunes+'s flat theme.
+QPalette draculaPalette()
+{
+    using namespace dracula;
+    QPalette pal;
+    for (auto g : {QPalette::Active, QPalette::Inactive}) {
+        pal.setColor(g, QPalette::Window, background);
+        pal.setColor(g, QPalette::WindowText, foreground);
+        pal.setColor(g, QPalette::Base, background);
+        pal.setColor(g, QPalette::AlternateBase, QColor(0x2d, 0x2f, 0x3d));
+        pal.setColor(g, QPalette::ToolTipBase, currentLine);
+        pal.setColor(g, QPalette::ToolTipText, foreground);
+        pal.setColor(g, QPalette::Text, foreground);
+        pal.setColor(g, QPalette::Button, raised);
+        pal.setColor(g, QPalette::ButtonText, foreground);
+        pal.setColor(g, QPalette::BrightText, Qt::white);
+        pal.setColor(g, QPalette::PlaceholderText, comment);
+        pal.setColor(g, QPalette::Link, cyan);
+        pal.setColor(g, QPalette::LinkVisited, purple);
+        pal.setColor(g, QPalette::Light, QColor(0x50, 0x53, 0x68));
+        pal.setColor(g, QPalette::Midlight, currentLine);
+        pal.setColor(g, QPalette::Mid, deep);
+        pal.setColor(g, QPalette::Dark, QColor(0x10, 0x11, 0x16));
+        pal.setColor(g, QPalette::Shadow, Qt::black);
+        pal.setColor(g, QPalette::Accent, purple);
+    }
+    pal.setColor(QPalette::Active, QPalette::Highlight, purple);
+    pal.setColor(QPalette::Active, QPalette::HighlightedText, chrome);
+    pal.setColor(QPalette::Inactive, QPalette::Highlight, currentLine);
+    pal.setColor(QPalette::Inactive, QPalette::HighlightedText, foreground);
+    for (auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText})
+        pal.setColor(QPalette::Disabled, role, comment);
+    pal.setColor(QPalette::Disabled, QPalette::Base, background);
+    return pal;
+}
+
 QPalette flatPalette(bool dark)
 {
     const QColor window = dark ? QColor(0x1c, 0x1c, 0x1e) : QColor(0xf4, 0xf5, 0xf7);
@@ -96,6 +147,7 @@ Appearance::Appearance()
     }
     // Light is the default mode; "auto" and "dark" are only stored once chosen.
     m_mode = mode == QLatin1String("dark") ? Mode::Dark : mode == QLatin1String("auto") ? Mode::Auto : Mode::Light;
+    m_darkStyle = s.value(kDarkStyleKey).toString() == QLatin1String("dracula") ? DarkStyle::Dracula : DarkStyle::Graphite;
     m_resolved = m_classic;  // a safe value before install() resolves for real
 }
 
@@ -141,6 +193,14 @@ void Appearance::setMode(Mode mode)
     if (m_kind == Kind::Modern) resolve();
 }
 
+void Appearance::setDarkStyle(DarkStyle style)
+{
+    if (style == m_darkStyle) return;
+    m_darkStyle = style;
+    QSettings().setValue(kDarkStyleKey, style == DarkStyle::Dracula ? QStringLiteral("dracula") : QStringLiteral("graphite"));
+    if (m_kind == Kind::Modern) resolve();
+}
+
 void Appearance::resolve()
 {
     // 1. Set (or clear) the OS colour-scheme override first, so a later read of
@@ -159,7 +219,7 @@ void Appearance::resolve()
     } else {
         const bool dark = m_mode == Mode::Dark ||
                           (m_mode == Mode::Auto && h->colorScheme() == Qt::ColorScheme::Dark);
-        m_resolved = dark ? Theme::FlatDark : Theme::FlatLight;
+        m_resolved = !dark ? Theme::FlatLight : m_darkStyle == DarkStyle::Dracula ? Theme::FlatDracula : Theme::FlatDark;
     }
 
     applyPalette();
@@ -171,6 +231,10 @@ void Appearance::resolve()
 void Appearance::applyPalette()
 {
     if (!qApp) return;
+    if (isDracula()) {
+        QApplication::setPalette(draculaPalette());
+        return;
+    }
     if (isFlat()) {
         QApplication::setPalette(flatPalette(m_resolved == Theme::FlatDark));
         return;
@@ -191,9 +255,14 @@ QColor Appearance::highlight() const
     case Theme::Gray: return QColor(0x75, 0x87, 0xa0);
     case Theme::FlatLight:
     case Theme::FlatDark: return QColor(0x0a, 0x84, 0xff);
+    case Theme::FlatDracula: return dracula::purple;
     default: return QColor(0x38, 0x75, 0xd7);
     }
 }
+
+QColor Appearance::highlightedText() const { return isDracula() ? dracula::chrome : QColor(Qt::white); }
+
+QColor Appearance::accent() const { return isFlat() ? highlight() : QColor(0x0a, 0x84, 0xff); }
 
 QColor Appearance::sidebarBackground() const
 {
@@ -201,33 +270,92 @@ QColor Appearance::sidebarBackground() const
     case Theme::Gray: return QColor(0xe0, 0xe0, 0xe0);
     case Theme::FlatLight: return QColor(0xec, 0xee, 0xf2);
     case Theme::FlatDark: return QColor(0x20, 0x20, 0x22);
+    case Theme::FlatDracula: return dracula::background;
     default: return QColor(0xd6, 0xdd, 0xe5);
     }
 }
 
+QColor Appearance::pageViewBackground() const
+{
+    switch (m_resolved) {
+    case Theme::FlatDark: return QColor(0x2a, 0x2a, 0x2c);
+    case Theme::FlatDracula: return dracula::deep;
+    default: return QColor(0xe4, 0xe4, 0xe6);
+    }
+}
+
+QColor Appearance::text() const
+{
+    if (isDracula()) return dracula::foreground;
+    return m_resolved == Theme::FlatDark ? QColor(0xe5, 0xe5, 0xea) : QColor(0x1d, 0x1d, 0x1f);
+}
+
+QColor Appearance::dimText() const
+{
+    if (isDracula()) return dracula::comment;
+    return m_resolved == Theme::FlatDark ? QColor(0x8e, 0x8e, 0x93) : QColor(0x86, 0x86, 0x8b);
+}
+
+QColor Appearance::fieldBackground() const
+{
+    if (isDracula()) return dracula::background;
+    return m_resolved == Theme::FlatDark ? QColor(0x1c, 0x1c, 0x1e) : QColor(Qt::white);
+}
+
 QColor Appearance::windowChrome() const
 {
+    if (isDracula()) return dracula::chrome;
     return m_resolved == Theme::FlatDark ? QColor(0x2a, 0x2a, 0x2c) : QColor(0xec, 0xec, 0xef);
 }
 
 QColor Appearance::chromeBorder() const
 {
+    if (isDracula()) return dracula::deep;
     return m_resolved == Theme::FlatDark ? QColor(0x0c, 0x0c, 0x0d) : QColor(0xd2, 0xd2, 0xd7);
 }
 
 QColor Appearance::hairline() const
 {
+    if (isDracula()) return dracula::raised;
     return m_resolved == Theme::FlatDark ? QColor(0x33, 0x33, 0x36) : QColor(0xe2, 0xe2, 0xe6);
 }
 
 QColor Appearance::scrollTrack() const
 {
+    if (isDracula()) return dracula::background;
     return m_resolved == Theme::FlatDark ? QColor(0x20, 0x20, 0x22) : QColor(0xee, 0xf0, 0xf3);
 }
 
 QColor Appearance::scrollThumb() const
 {
+    if (isDracula()) return dracula::currentLine;
     return m_resolved == Theme::FlatDark ? QColor(0x48, 0x48, 0x4a) : QColor(0xc2, 0xc2, 0xc8);
+}
+
+Appearance::ArrowColors Appearance::arrowColors(int weight) const
+{
+    // Weights 1 (lightest) to 4 (solid), mirroring those offered by XTunes+.
+    static const ArrowColors light[4] = {
+        {QColor(0xdc, 0xeb, 0xff), QColor(0x0a, 0x84, 0xff)},
+        {QColor(0xb6, 0xda, 0xff), QColor(0x0a, 0x84, 0xff)},
+        {QColor(0x78, 0xbb, 0xff), QColor(0xff, 0xff, 0xff)},
+        {QColor(0x0a, 0x84, 0xff), QColor(0xff, 0xff, 0xff)},
+    };
+    static const ArrowColors graphite[4] = {
+        {QColor(0x36, 0x36, 0x38), QColor(0xe9, 0xe9, 0xee)},
+        {QColor(0x50, 0x50, 0x53), QColor(0xe9, 0xe9, 0xee)},
+        {QColor(0x7b, 0x7b, 0x7f), QColor(0x1c, 0x1c, 0x1e)},
+        {QColor(0xc9, 0xc9, 0xcf), QColor(0x1c, 0x1c, 0x1e)},
+    };
+    static const ArrowColors draculaArrows[4] = {
+        {dracula::raised, dracula::foreground},
+        {dracula::currentLine, dracula::foreground},
+        {dracula::comment, dracula::foreground},
+        {dracula::purple, dracula::chrome},
+    };
+    const int i = qBound(1, weight, 4) - 1;
+    if (isDracula()) return draculaArrows[i];
+    return m_resolved == Theme::FlatDark ? graphite[i] : light[i];
 }
 
 QGradientStops Appearance::thumbStops(Theme theme)

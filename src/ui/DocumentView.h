@@ -11,6 +11,7 @@
 
 #include <utility>
 
+class PdfDocument;
 class RenderService;
 
 // Page view: continuous vertical scroll, one page, or two pages side by
@@ -39,6 +40,13 @@ public:
     // Re-reads page sizes from the document and relays out. Used when the
     // document's reported page size changes (e.g. the image scale preference).
     void refresh();
+    // The document's pages changed (inserted, deleted, moved or rotated):
+    // drops search hits and the selection, and relays out.
+    void documentChanged();
+    // Where a point on a page (in points) currently is in the viewport.
+    QPointF mapFromPage(int page, QPointF pt) const { return pageTransform(page).map(pt); }
+    // A fillable form field has the keyboard focus.
+    bool formHasFocus() const;
 
     DisplayMode displayMode() const { return m_mode; }
     void setDisplayMode(DisplayMode mode);
@@ -76,6 +84,8 @@ protected:
     void wheelEvent(QWheelEvent *) override;
     void keyPressEvent(QKeyEvent *) override;
     bool viewportEvent(QEvent *) override;
+    bool event(QEvent *) override;
+    bool focusNextPrevChild(bool next) override;
 
 private:
     void relayout();
@@ -94,8 +104,10 @@ private:
     QPointF toPage(int page, QPointF viewportPos) const;
     void updateCursor(QPointF pos);
     void openLink(const QString &link);
+    bool formKeyPress(QKeyEvent *e);
 
     DocumentPtr m_doc;
+    PdfDocument *m_pdf = nullptr;  // m_doc, when it is a PDF
     QPointer<RenderService> m_renderer;
     double m_zoom = 1.0;
     double m_unit = 1.0;
@@ -122,6 +134,7 @@ private:
     QPointF m_pressPagePt;
     bool m_dragging = false;
     bool m_panning = false;
+    bool m_formPress = false;  // the press went to a form field
     QPoint m_panStart;
     QPoint m_scrollStart;
     TextHit m_selection;

@@ -39,6 +39,7 @@ QString tileId(int page, int scaleKey, int tx, int ty)
 // tab never receives results.
 struct RenderService::Shared {
     std::atomic<int> generation{0};
+    int structure = 0;  // GUI thread only; see reset()
     QPointer<RenderService> service;
 };
 
@@ -69,12 +70,43 @@ void RenderService::cancelPending()
     m_pending.clear();
 }
 
+void RenderService::invalidatePage(int page)
+{
+    const QString tiles = QStringLiteral("%1/").arg(page), thumbs = QStringLiteral("t%1/").arg(page);
+    for (const QString &id : m_tiles.keys())
+        if (page < 0 || id.startsWith(tiles)) m_stale.insert(id);
+    for (const QString &id : m_thumbs.keys())
+        if (page < 0 || id.startsWith(thumbs)) m_stale.insert(id);
+    if (page < 0) {
+        // Every page: results of running jobs are dropped and re-requested.
+        m_shared->structure++;
+        m_pending.clear();
+    } else {
+        ++m_pageRevision[page];
+    }
+}
+
+void RenderService::reset()
+{
+    m_shared->generation++;
+    m_shared->structure++;
+    m_tiles.clear();
+    m_thumbs.clear();
+    m_pending.clear();
+    m_stale.clear();
+    m_pageRevision.clear();
+}
+
 QImage RenderService::tile(int page, double scale, int tx, int ty)
 {
     const int sk = scaleKey(scale);
     const QString id = tileId(page, sk, tx, ty);
-    if (QImage *img = m_tiles.object(id)) return *img;
-    if (m_pending.contains(id) || g_shuttingDown) return {};
+    QImage cached;
+    if (QImage *img = m_tiles.object(id)) {
+        if (!m_stale.contains(id)) return *img;
+        cached = *img;  // shown until the re-render arrives
+    }
+    if (m_pending.contains(id) || g_shuttingDown) return cached;
     m_pending.insert(id);
 
     const QSizeF size = m_doc->pageSize(page);
@@ -82,9 +114,11 @@ QImage RenderService::tile(int page, double scale, int tx, int ty)
     const QRect rect = QRect(tx * kTileSize, ty * kTileSize, kTileSize, kTileSize).intersected(full);
     if (rect.isEmpty()) {
         m_pending.remove(id);
-        return {};
+        return cached;
     }
     const int gen = m_shared->generation;
+    const int structure = m_shared->structure;
+    const int revision = m_pageRevision.value(page);
     std::weak_ptr<Shared> weak = m_shared;
     DocumentPtr doc = m_doc;
     renderPool()->start([=] {
@@ -93,23 +127,36 @@ QImage RenderService::tile(int page, double scale, int tx, int ty)
             if (!s || s->generation != gen || g_shuttingDown) return;  // stale, or quitting
         }
         QImage img = doc->renderPage(page, scale, rect);
-        QMetaObject::invokeMethod(qApp, [weak, id, page, img = std::move(img)] {
+        QMetaObject::invokeMethod(qApp, [weak, id, page, structure, revision, img = std::move(img)] {
             auto s = weak.lock();
-            if (!s || !s->service) return;
+            if (!s || !s->service || s->structure != structure) return;
             RenderService *self = s->service;
-            self->m_pending.remove(id);
-            self->m_tiles.insert(id, new QImage(img), qMax<qsizetype>(1, img.sizeInBytes() / 1024));
+            self->deliver(self->m_tiles, id, page, revision, img);
             emit self->tileReady(page);
         }, Qt::QueuedConnection);
     });
-    return {};
+    return cached;
+}
+
+void RenderService::deliver(QCache<QString, QImage> &cache, const QString &id, int page, int revision,
+                            const QImage &img)
+{
+    m_pending.remove(id);
+    cache.insert(id, new QImage(img), qMax<qsizetype>(1, img.sizeInBytes() / 1024));
+    // Rendered before the page last changed: keep it, but render again.
+    if (revision == m_pageRevision.value(page)) m_stale.remove(id);
+    else m_stale.insert(id);
 }
 
 QImage RenderService::thumbnail(int page, int width)
 {
     const QString id = QStringLiteral("t%1/%2").arg(page).arg(width);
-    if (QImage *img = m_thumbs.object(id)) return *img;
-    if (m_pending.contains(id) || g_shuttingDown) return {};
+    QImage cached;
+    if (QImage *img = m_thumbs.object(id)) {
+        if (!m_stale.contains(id)) return *img;
+        cached = *img;
+    }
+    if (m_pending.contains(id) || g_shuttingDown) return cached;
     m_pending.insert(id);
     const QSizeF size = m_doc->pageSize(page);
     // Fit within width x (aspect cap * width): a hostile 1 x 14400 pt page
@@ -117,20 +164,21 @@ QImage RenderService::thumbnail(int page, int width)
     const double maxH = double(width) * Limits::kMaxThumbnailAspect;
     const double scale = qMin(width / qMax(1.0, size.width()), maxH / qMax(1.0, size.height()));
     const QRect rect(0, 0, qMax(1, qCeil(size.width() * scale)), qMax(1, qCeil(size.height() * scale)));
+    const int structure = m_shared->structure;
+    const int revision = m_pageRevision.value(page);
     std::weak_ptr<Shared> weak = m_shared;
     DocumentPtr doc = m_doc;
     // Thumbnails are not tied to the zoom generation.
     renderPool()->start([=] {
         if (weak.expired() || g_shuttingDown) return;
         QImage img = doc->renderPage(page, scale, rect);
-        QMetaObject::invokeMethod(qApp, [weak, id, page, img = std::move(img)] {
+        QMetaObject::invokeMethod(qApp, [weak, id, page, structure, revision, img = std::move(img)] {
             auto s = weak.lock();
-            if (!s || !s->service) return;
+            if (!s || !s->service || s->structure != structure) return;
             RenderService *self = s->service;
-            self->m_pending.remove(id);
-            self->m_thumbs.insert(id, new QImage(img), qMax<qsizetype>(1, img.sizeInBytes() / 1024));
+            self->deliver(self->m_thumbs, id, page, revision, img);
             emit self->thumbnailReady(page);
         }, Qt::QueuedConnection);
     }, -1);  // lower priority than visible tiles
-    return {};
+    return cached;
 }

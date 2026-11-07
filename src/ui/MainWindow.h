@@ -15,6 +15,7 @@ class QLabel;
 class QLineEdit;
 class QMenu;
 class QTabWidget;
+class QTimer;
 class QToolBar;
 class QToolButton;
 
@@ -34,6 +35,8 @@ protected:
     void dragEnterEvent(QDragEnterEvent *e) override;
     void dropEvent(QDropEvent *e) override;
     void closeEvent(QCloseEvent *e) override;
+    void moveEvent(QMoveEvent *e) override;
+    void resizeEvent(QResizeEvent *e) override;
     void paintEvent(QPaintEvent *e) override;
     void mousePressEvent(QMouseEvent *e) override;
     void mouseDoubleClickEvent(QMouseEvent *e) override;
@@ -51,6 +54,12 @@ private:
     void updateRecentMenu();
     void openDialog();
     void closeTab(int index);
+    // Offers to save a modified document. False if the user cancelled.
+    bool maybeSave(DocumentTab *tab);
+    bool saveAs();
+    bool saveTab(DocumentTab *tab);  // Save, or Save As for converted documents
+    void updateTabText(DocumentTab *tab);
+    void addRecent(const QString &path);
     void exportPdf();
     void print();
     void copy();
@@ -59,20 +68,28 @@ private:
     void showPreferences();
     bool handleChromeMouse(QEvent *e);
     void updateTabBarStyle();
+    void updateSearchStyle();
+    void saveWindowGeometry();
 
     static QList<MainWindow *> s_windows;  // all open windows, newest last
 
     QTabWidget *m_tabs;
     QToolBar *m_toolBar = nullptr;
-    QLineEdit *m_search;
+    QLineEdit *m_search = nullptr;
     QLabel *m_searchStatus;
     QLabel *m_pageLabel;
     QComboBox *m_zoomBox;
     QToolButton *m_sidebarButton;
     QMenu *m_recentMenu;
     PreferencesDialog *m_preferences = nullptr;
+    // Saves the size and position shortly after the user stops moving or
+    // resizing, so they survive a crash or forced quit, not just a close.
+    QTimer *m_geometryTimer;
 
-    QAction *m_open, *m_close, *m_export, *m_print, *m_openDefault, *m_reveal;
+    QAction *m_open, *m_close, *m_save, *m_saveAs, *m_export, *m_print, *m_openDefault, *m_reveal;
+    QAction *m_protect;
+    QAction *m_undo, *m_redo, *m_insertFile, *m_insertBlank, *m_deletePages;
+    QAction *m_rotPageLeft, *m_rotPageRight, *m_exportPages;
     QAction *m_copy, *m_find, *m_findNext, *m_findPrev;
     QAction *m_hideSidebar, *m_thumbs, *m_toc;
     QActionGroup *m_sidebarGroup;

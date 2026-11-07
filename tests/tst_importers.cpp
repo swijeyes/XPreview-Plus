@@ -9,9 +9,13 @@
 #include "core/SafeImage.h"
 #include "flow/FlowDocument.h"
 #include "odf/OdfStyles.h"
+#include "pdf/PdfDocument.h"
+#include "pdf/PdfSecurity.h"
+#include "ps/PostScriptConverter.h"
 #include "rtf/RtfImporter.h"
 #include "rtf/RtfTokenizer.h"
 
+#include <QPdfWriter>
 #include <QTemporaryDir>
 
 #include <limits>
@@ -33,6 +37,76 @@ private:
                     for (const Cell &c : r.cells) s += allText(c.blocks);
         }
         return s;
+    }
+
+    // A one-page AcroForm: text field "name" (100,650)-(400,680), check box
+    // "agree" (100,600)-(120,620) and combo box "color", in PDF user space.
+    static QByteArray formPdf()
+    {
+        QList<QByteArray> objs = {
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 8 0 R] /NeedAppearances true"
+            " /DR << /Font << /Helv 9 0 R >> >> /DA (/Helv 12 Tf 0 g) >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 8 0 R]"
+            " /Resources << /Font << /Helv 9 0 R >> >> >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [100 650 400 680] /P 3 0 R /F 4"
+            " /DA (/Helv 12 Tf 0 g) /MK << /BC [0 0 0] >> >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /Rect [100 600 120 620] /P 3 0 R /F 4"
+            " /V /Off /AS /Off /MK << /BC [0 0 0] /CA (4) >> /DA (/ZaDb 0 Tf 0 g)"
+            " /AP << /N << /Yes 6 0 R /Off 7 0 R >> >> >>",
+            "<< /BBox [0 0 20 20] /Length 32 >>\nstream\n0 g 4 4 12 12 re f 0 G 0 0 20 20 re S\nendstream",
+            "<< /BBox [0 0 20 20] /Length 18 >>\nstream\n0 G 0 0 20 20 re S\nendstream",
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (color) /Rect [100 540 300 565] /P 3 0 R"
+            " /F 4 /Opt [(Red) (Green) (Blue)] /V (Red) /DA (/Helv 12 Tf 0 g) /MK << /BC [0 0 0] >> >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        };
+        QByteArray pdf = "%PDF-1.7\n";
+        QList<int> offsets;
+        for (int i = 0; i < objs.size(); ++i) {
+            offsets << pdf.size();
+            pdf += QByteArray::number(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
+        }
+        const int xref = pdf.size();
+        pdf += "xref\n0 " + QByteArray::number(objs.size() + 1) + "\n0000000000 65535 f \n";
+        for (int o : offsets) pdf += QByteArray::number(o).rightJustified(10, '0') + " 00000 n \n";
+        pdf += "trailer\n<< /Size " + QByteArray::number(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" +
+               QByteArray::number(xref) + "\n%%EOF\n";
+        return pdf;
+    }
+
+    // A PDF whose pages say "Page 1" ... "Page n" (612 x 792, except page 2
+    // which is landscape).
+    static QString numberedPdf(const QString &path, int n)
+    {
+        QPdfWriter w(path);
+        w.setResolution(72);
+        auto size = [](int i) { return i == 1 ? QSizeF(792, 612) : QSizeF(612, 792); };
+        w.setPageSize(QPageSize(size(0), QPageSize::Point, QString(), QPageSize::ExactMatch));
+        w.setPageMargins({});
+        QPainter p(&w);
+        for (int i = 0; i < n; ++i) {
+            if (i > 0) {
+                w.setPageSize(QPageSize(size(i), QPageSize::Point, QString(), QPageSize::ExactMatch));
+                w.newPage();
+            }
+            p.setFont(QFont(QStringLiteral("Arimo"), 24));
+            p.drawText(QPointF(72, 100), QStringLiteral("Page %1").arg(i + 1));
+        }
+        p.end();
+        return path;
+    }
+
+    static QStringList pageLabels(PdfDocument &doc)
+    {
+        QStringList out;
+        for (int i = 0; i < doc.pageCount(); ++i) out << doc.pageText(i).trimmed();
+        return out;
+    }
+
+    static std::shared_ptr<PdfDocument> openPdf(const QString &path)
+    {
+        PdfDocument::LoadError err;
+        return PdfDocument::open(path, {}, &err);
     }
 
 private slots:
@@ -229,6 +303,12 @@ private slots:
         const SniffResult mism = sniffFile(write("b.pdf", "{\\rtf1 hi}"));
         QCOMPARE(mism.format, SniffedFormat::Rtf);
         QVERIFY(mism.extensionMismatch);
+        QVERIFY(mism.knownExtension);
+        // A document disguised under a program's extension: no mismatch is
+        // reported, but the extension is not a document one.
+        const SniffResult hta = sniffFile(write("c.hta", "%PDF-1.4\n"));
+        QCOMPARE(hta.format, SniffedFormat::Pdf);
+        QVERIFY(!hta.knownExtension);
     }
     // --- Security regressions ------------------------------------------------
 
@@ -292,6 +372,28 @@ private slots:
         QVERIFY(!out.contains("secret"));
         QVERIFY(out.contains("#ok"));
         QVERIFY(out.contains("data:image/png"));
+    }
+
+    // gzip around a zlib stream from qCompress (2-byte header, 4-byte
+    // Adler-32 trailer); the gzip CRC is not checked by the reader.
+    static QByteArray gzip(const QByteArray &data)
+    {
+        const QByteArray z = qCompress(data);
+        QByteArray out("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10);
+        out += z.mid(4 + 2, z.size() - 4 - 2 - 4);
+        out += QByteArray(8, '\0');
+        return out;
+    }
+
+    void secSvgzDecompressionBounded()
+    {
+        const QByteArray svg = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>";
+        QCOMPARE(SafeImage::sanitizeSvg(gzip(svg)), svg);
+        // A few hundred KB that inflate past the SVG limit are refused.
+        const QByteArray bomb = gzip(svg + QByteArray(Limits::kMaxSvgBytes + 1, ' '));
+        QVERIFY(bomb.size() < 1024 * 1024);
+        QVERIFY(SafeImage::sanitizeSvg(bomb).isEmpty());
+        QVERIFY(SafeImage::sanitizeSvg(bomb.left(bomb.size() / 2)).isEmpty());  // truncated
     }
 
     void secEmbeddedImageDimensionsChecked()
@@ -386,6 +488,274 @@ private slots:
         // A huge bitmap request is refused rather than allocated.
         QVERIFY(doc.renderPage(0, 100.0, QRect(0, 0, 100000, 100000)).isNull());
         QVERIFY(!doc.renderPage(0, 1.0, QRect(0, 0, 200, 200)).isNull());
+    }
+
+    void pdfFormFill()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("form.pdf"));
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(formPdf());
+        f.close();
+        auto doc = openPdf(path);
+        QVERIFY(doc);
+        QVERIFY(doc->hasForm());
+        // Page points, origin top-left: the name field's centre.
+        const QPointF name(250, 792 - 665), agree(110, 792 - 610);
+        QCOMPARE(doc->formFieldAt(0, name), PdfDocument::kTextField);
+        QCOMPARE(doc->formFieldAt(0, QPointF(500, 100)), -1);
+        QVERIFY(!doc->isModified());
+
+        doc->formMouse(0, name, PdfDocument::Mouse::Press, {});
+        doc->formMouse(0, name, PdfDocument::Mouse::Release, {});
+        QVERIFY(doc->formHasFocus());
+        QVERIFY(doc->formText(QStringLiteral("Hello")));
+        doc->formKey(Qt::Key_Backspace, {});
+        doc->formText(QStringLiteral("o, wörld"));
+        doc->formKey(Qt::Key_Left, {});
+        doc->formText(QStringLiteral("!"));
+        doc->formSelectAll();
+        QCOMPARE(doc->formSelectedText(), QStringLiteral("Hello, wörl!d"));
+        // Tab moves on to the check box; Space ticks it.
+        doc->formKey(Qt::Key_Tab, {});
+        QVERIFY(doc->formHasFocus());
+        doc->formText(QStringLiteral(" "));
+        doc->formCommit();
+        QVERIFY(!doc->formHasFocus());
+        QVERIFY(doc->isModified());
+        QMap<QString, QString> values = doc->formValues();
+        QCOMPARE(values.value(QStringLiteral("name")), QStringLiteral("Hello, wörl!d"));
+        QCOMPARE(values.value(QStringLiteral("agree")), QStringLiteral("On"));
+        QCOMPARE(values.value(QStringLiteral("color")), QStringLiteral("Red"));
+        // The typed text is drawn: dark pixels inside the name field.
+        const QImage page = doc->renderPage(0, 2.0, QRect(0, 0, 1224, 1584));
+        if (qEnvironmentVariableIsSet("XPREVIEW_DUMP")) page.save(qEnvironmentVariable("XPREVIEW_DUMP"));
+        int dark = 0;
+        for (int y = 2 * (792 - 678); y < 2 * (792 - 652); ++y)
+            for (int x = 2 * 104; x < 2 * 396; ++x) dark += qGray(page.pixel(x, y)) < 100;
+        QVERIFY2(dark > 100, qPrintable(QString::number(dark)));
+
+        // Saved values survive a reload.
+        const QString out = dir.filePath(QStringLiteral("filled.pdf"));
+        QString err;
+        QVERIFY2(doc->save(out, &err), qPrintable(err));
+        QVERIFY(!doc->isModified());
+        QCOMPARE(doc->filePath(), out);
+        auto again = openPdf(out);
+        QVERIFY(again);
+        values = again->formValues();
+        QCOMPARE(values.value(QStringLiteral("name")), QStringLiteral("Hello, wörl!d"));
+        QCOMPARE(values.value(QStringLiteral("agree")), QStringLiteral("On"));
+        // The original file is untouched.
+        QCOMPARE(openPdf(path)->formValues().value(QStringLiteral("name")), QString());
+    }
+
+    void pdfPageEditing()
+    {
+        QTemporaryDir dir;
+        auto doc = openPdf(numberedPdf(dir.filePath(QStringLiteral("a.pdf")), 4));
+        QVERIFY(doc);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 1", "Page 2", "Page 3", "Page 4"}));
+        const int rev = doc->structureRevision();
+
+        // Move the last page to the front, then pages 1 and 3 to the end.
+        QCOMPARE(doc->movePages({3}, 0), 0);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 4", "Page 1", "Page 2", "Page 3"}));
+        QCOMPARE(doc->movePages({1, 3}, 4), 2);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 4", "Page 2", "Page 1", "Page 3"}));
+        QCOMPARE(doc->movePages({1}, 1), -1);  // no-op
+        QVERIFY(doc->structureRevision() > rev);
+        QVERIFY(doc->isModified());
+        QCOMPARE(doc->pageSize(1), QSizeF(792, 612));  // sizes follow their pages
+
+        // Rotation swaps the page box.
+        QVERIFY(doc->rotatePages({1}, 1));
+        QCOMPARE(doc->pageSize(1), QSizeF(612, 792));
+
+        // Delete, but never every page.
+        QString err;
+        QVERIFY(!doc->deletePages({0, 1, 2, 3}, &err));
+        QVERIFY(!err.isEmpty());
+        QVERIFY(doc->deletePages({0, 2}, &err));
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 2", "Page 3"}));
+
+        // Combine: another PDF's pages, and copies of our own.
+        QFile other(numberedPdf(dir.filePath(QStringLiteral("b.pdf")), 2));
+        QVERIFY(other.open(QIODevice::ReadOnly));
+        QCOMPARE(doc->insertPdf(other.readAll(), {}, 1, &err), 2);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 2", "Page 1", "Page 2", "Page 3"}));
+        const QByteArray copy = doc->extractPages({3}, &err);
+        QVERIFY(!copy.isEmpty());
+        QCOMPARE(doc->insertPdf(copy, {}, 0, &err), 1);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 3", "Page 2", "Page 1", "Page 2", "Page 3"}));
+        QVERIFY(doc->insertBlankPage(5, QSizeF(300, 400)));
+        QCOMPARE(doc->pageCount(), 6);
+        QCOMPARE(doc->pageSize(5), QSizeF(300, 400));
+        QCOMPARE(doc->insertPdf("not a pdf", {}, 0, &err), 0);
+
+        // Undo walks back step by step, redo forward again.
+        QVERIFY(doc->undo());
+        QCOMPARE(doc->pageCount(), 5);
+        QVERIFY(doc->undo());
+        QVERIFY(doc->undo());
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 2", "Page 3"}));
+        QVERIFY(doc->redo());
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 2", "Page 1", "Page 2", "Page 3"}));
+        while (doc->canUndo()) QVERIFY(doc->undo());
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 1", "Page 2", "Page 3", "Page 4"}));
+        QVERIFY(!doc->isModified());  // back where it was loaded
+        while (doc->canRedo()) QVERIFY(doc->redo());
+        QCOMPARE(doc->pageCount(), 6);
+
+        // Save in place: the file now has the edited pages.
+        const QString path = doc->filePath();
+        QVERIFY2(doc->save(path, &err), qPrintable(err));
+        QVERIFY(!doc->isModified());
+        auto reopened = openPdf(path);
+        QVERIFY(reopened);
+        QCOMPARE(reopened->pageCount(), 6);
+        QCOMPARE(pageLabels(*reopened).mid(0, 5), QStringList({"Page 3", "Page 2", "Page 1", "Page 2", "Page 3"}));
+        // Still editable after saving (now backed by memory).
+        QVERIFY(doc->deletePages({5}, &err));
+        QVERIFY(doc->isModified());
+        // Export writes the edits, not the file on disk.
+        const QString exported = dir.filePath(QStringLiteral("export.pdf"));
+        QVERIFY(Exporter::exportPdf(*doc, exported, 0, &err));
+        QCOMPARE(openPdf(exported)->pageCount(), 5);
+    }
+
+    void pdfEncryption()
+    {
+        if (!PdfSecurity::available()) QSKIP("built without qpdf");
+        QTemporaryDir dir;
+        auto doc = openPdf(numberedPdf(dir.filePath(QStringLiteral("plain.pdf")), 3));
+        QVERIFY(doc && !doc->isEncrypted() && !doc->isRestricted());
+
+        PdfDocument::Protection p;
+        p.mode = PdfDocument::Protection::Mode::Custom;
+        p.openPassword = "s3cret pässword";
+        p.ownerPassword = "owner";
+        p.allowPrint = false;
+        p.allowChanges = false;
+        QString err;
+        PdfDocument::Protection noOwner = p;
+        noOwner.ownerPassword.clear();
+        QVERIFY(!doc->setProtection(noOwner, &err));  // restrictions need an owner password
+        QVERIFY2(doc->setProtection(p, &err), qPrintable(err));
+        QVERIFY(doc->isModified());
+        const QString locked = dir.filePath(QStringLiteral("locked.pdf"));
+        QVERIFY2(doc->save(locked, &err), qPrintable(err));
+        QVERIFY(QFileInfo(locked).size() > 0);
+
+        // No password, or a wrong one: refused.
+        PdfDocument::LoadError e;
+        QVERIFY(!PdfDocument::open(locked, {}, &e));
+        QCOMPARE(e, PdfDocument::LoadError::Password);
+        QVERIFY(!PdfDocument::open(locked, "wrong", &e));
+        // The open password: readable, AES-256, restricted.
+        auto user = PdfDocument::open(locked, p.openPassword, &e);
+        QVERIFY(user);
+        QVERIFY(user->isEncrypted());
+        QCOMPARE(user->encryptionDescription(), QStringLiteral("AES, 256-bit"));
+        QVERIFY(!user->canPrint() && user->canCopy() && !user->canEditPages());
+        QCOMPARE(pageLabels(*user), QStringList({"Page 1", "Page 2", "Page 3"}));
+        QVERIFY(!user->deletePages({0}, &err));
+        QCOMPARE(user->movePages({2}, 0), -1);
+        QVERIFY(!user->setProtection({}, &err));  // only the owner may
+        QVERIFY(user->extractPages({0}, &err).isEmpty());
+        // The owner password lifts everything.
+        auto owner = PdfDocument::open(locked, "owner", &e);
+        QVERIFY(owner && !owner->isRestricted());
+
+        // Editing keeps the original protection on save.
+        QVERIFY(owner->deletePages({1}, &err));
+        const QString edited = dir.filePath(QStringLiteral("edited.pdf"));
+        QVERIFY2(owner->save(edited, &err), qPrintable(err));
+        QVERIFY(!PdfDocument::open(edited, {}, &e));
+        auto again = PdfDocument::open(edited, p.openPassword, &e);
+        QVERIFY(again && !again->canPrint());
+        QCOMPARE(pageLabels(*again), QStringList({"Page 1", "Page 3"}));
+        // Undo still works on an encrypted document (snapshots are internal).
+        QVERIFY(owner->undo());
+        QCOMPARE(owner->pageCount(), 3);
+
+        // Removing the protection writes a normal PDF.
+        QVERIFY(owner->setProtection({}, &err));
+        const QString open = dir.filePath(QStringLiteral("open.pdf"));
+        QVERIFY(owner->save(open, &err));
+        auto plain = PdfDocument::open(open, {}, &e);
+        QVERIFY(plain && !plain->isEncrypted());
+        // Export of an encrypted, edited document stays encrypted.
+        QVERIFY(again->rotatePages({0}, 1) == false);  // restricted
+        auto owner2 = PdfDocument::open(edited, "owner", &e);
+        QVERIFY(owner2->rotatePages({0}, 1));
+        const QString exported = dir.filePath(QStringLiteral("export.pdf"));
+        QVERIFY(Exporter::exportPdf(*owner2, exported, 0, &err));
+        QVERIFY(!PdfDocument::open(exported, {}, &e));
+        QCOMPARE(e, PdfDocument::LoadError::Password);
+    }
+
+    void postScriptAndEps()
+    {
+        if (PostScript::ghostscriptPath().isEmpty()) QSKIP("Ghostscript not installed");
+        QTemporaryDir dir;
+        auto write = [&](const QString &name, const QByteArray &data) {
+            QFile f(dir.filePath(name));
+            if (!f.open(QIODevice::WriteOnly)) return QString();
+            f.write(data);
+            return f.fileName();
+        };
+        const QString eps = write(QStringLiteral("logo.eps"),
+                                  "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 100\n"
+                                  "/Helvetica findfont 24 scalefont setfont 10 40 moveto (Hello EPS) show\n"
+                                  "0 0 1 setrgbcolor 150 10 40 80 rectfill showpage\n");
+        LoadResult r = loadDocument(eps);
+        QVERIFY2(r.document, qPrintable(r.error));
+        QCOMPARE(r.sniff.format, SniffedFormat::Eps);
+        QCOMPARE(r.document->kindName(), QStringLiteral("EPS image"));
+        QCOMPARE(r.document->pageCount(), 1);
+        QCOMPARE(r.document->pageSize(0), QSizeF(200, 100));  // cropped to the bounding box
+        QVERIFY(r.document->pageText(0).contains(QStringLiteral("Hello EPS")));
+        // Saving never overwrites the source; Save As a PDF works.
+        auto *pdf = static_cast<PdfDocument *>(r.document.get());
+        QString err;
+        QVERIFY(!pdf->save(eps, &err));
+        QVERIFY(pdf->save(dir.filePath(QStringLiteral("logo.pdf")), &err));
+
+        const QString ps = write(QStringLiteral("two.ps"),
+                                 "%!PS-Adobe-3.0\n<< /PageSize [300 400] >> setpagedevice\n"
+                                 "/Helvetica findfont 20 scalefont setfont\n"
+                                 "72 300 moveto (First) show showpage 72 300 moveto (Second) show showpage\n");
+        r = loadDocument(ps);
+        QVERIFY2(r.document, qPrintable(r.error));
+        QCOMPARE(r.sniff.format, SniffedFormat::PostScript);
+        QCOMPARE(r.document->pageCount(), 2);
+        QVERIFY(r.document->pageText(1).contains(QStringLiteral("Second")));
+    }
+
+    void postScriptIsSandboxed()
+    {
+        if (PostScript::ghostscriptPath().isEmpty()) QSKIP("Ghostscript not installed");
+        QTemporaryDir dir;
+        // A program that tries to read a file outside its input and to
+        // write next to the user's files, and prints what it read.
+        const QString target = dir.filePath(QStringLiteral("dropped.txt"));
+        QFile f(dir.filePath(QStringLiteral("evil.ps")));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("%!PS\n/Helvetica findfont 12 scalefont setfont 72 700 moveto\n"
+                "(/etc/passwd) (r) file 200 string readstring pop show\n"
+                "(" + target.toUtf8() + ") (w) file (pwned) writestring\nshowpage\n");
+        f.close();
+        LoadResult r = loadDocument(f.fileName());
+        if (r.document) QVERIFY(!r.document->pageText(0).contains(QStringLiteral("root")));
+        QVERIFY(!QFile::exists(target));
+        // Same with -dNOSAFER smuggled into the environment.
+        qputenv("GS_OPTIONS", "-dNOSAFER");
+        r = loadDocument(f.fileName());
+        qunsetenv("GS_OPTIONS");
+        if (r.document) QVERIFY(!r.document->pageText(0).contains(QStringLiteral("root")));
+        QVERIFY(!QFile::exists(target));
     }
 };
 

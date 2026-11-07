@@ -3,10 +3,13 @@
 
 #include "DocumentView.h"
 
+#include "Appearance.h"
 #include "RenderService.h"
 #include "core/Exporter.h"
 #include "core/Limits.h"
+#include "pdf/PdfDocument.h"
 
+#include <QClipboard>
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QMessageBox>
@@ -37,6 +40,7 @@ const QList<double> kZoomSteps = {0.1, 0.125, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 
 DocumentView::DocumentView(DocumentPtr doc, RenderService *renderer, QWidget *parent)
     : QAbstractScrollArea(parent), m_doc(std::move(doc)), m_renderer(renderer)
 {
+    if (m_doc->kind() == DocumentKind::Pdf) m_pdf = static_cast<PdfDocument *>(m_doc.get());
     setFrameShape(QFrame::NoFrame);
     viewport()->setMouseTracking(true);
     viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
@@ -169,9 +173,10 @@ QPointF DocumentView::toPage(int page, QPointF pos) const
 void DocumentView::paintEvent(QPaintEvent *event)
 {
     QPainter p(viewport());
-    const QColor bg = palette().color(QPalette::Window).lightness() > 128
-                          ? QColor(0xe4, 0xe4, 0xe6)
-                          : QColor(0x2a, 0x2a, 0x2c);
+    const QColor bg = Appearance::instance()->isFlat()
+                          ? Appearance::instance()->pageViewBackground()
+                          : palette().color(QPalette::Window).lightness() > 128 ? QColor(0xe4, 0xe4, 0xe6)
+                                                                                 : QColor(0x2a, 0x2a, 0x2c);
     p.fillRect(event->rect(), bg);
     if (!m_renderer) return;
 
@@ -376,6 +381,20 @@ void DocumentView::refresh()
     emit zoomChanged(m_zoom);
 }
 
+void DocumentView::documentChanged()
+{
+    m_hits.clear();
+    m_currentHit = -1;
+    m_selection = {};
+    m_formPress = false;
+    m_currentPage = qBound(0, m_currentPage, qMax(0, m_doc->pageCount() - 1));
+    if (m_pendingPage >= m_doc->pageCount()) m_pendingPage = -1;
+    refresh();
+    emit selectionChanged();
+}
+
+bool DocumentView::formHasFocus() const { return m_pdf && m_pdf->formHasFocus(); }
+
 void DocumentView::updateUnitScale()
 {
     double unit = 1.0;
@@ -517,7 +536,12 @@ void DocumentView::updateCursor(QPointF pos)
     const QPointF pt = toPage(page, pos);
     const QSizeF size = m_doc->pageSize(page);
     const bool onPage = QRectF(QPointF(0, 0), size).contains(pt);
-    if (onPage && m_doc->hasText() && !m_doc->linkAt(page, pt).isEmpty())
+    const int field = onPage && m_pdf ? m_pdf->formFieldAt(page, pt) : -1;
+    if (field == PdfDocument::kTextField)
+        viewport()->setCursor(Qt::IBeamCursor);
+    else if (field >= 0)
+        viewport()->setCursor(Qt::PointingHandCursor);
+    else if (onPage && m_doc->hasText() && !m_doc->linkAt(page, pt).isEmpty())
         viewport()->setCursor(Qt::PointingHandCursor);
     else if (onPage && m_doc->hasText())
         viewport()->setCursor(Qt::IBeamCursor);
@@ -534,6 +558,17 @@ void DocumentView::mousePressEvent(QMouseEvent *e)
     m_pressPage = pageAt(e->position());
     m_pressPagePt = toPage(m_pressPage, e->position());
     m_dragging = false;
+    if (m_pdf && m_pdf->hasForm() && !(e->modifiers() & Qt::AltModifier)) {
+        // Clicks on form fields go to the field (focus, toggle, open a list).
+        const bool onPage = QRectF(QPointF(0, 0), m_doc->pageSize(m_pressPage)).contains(m_pressPagePt);
+        if (onPage && m_pdf->formFieldAt(m_pressPage, m_pressPagePt) >= 0) {
+            clearSelection();
+            m_formPress = true;
+            m_pdf->formMouse(m_pressPage, m_pressPagePt, PdfDocument::Mouse::Press, e->modifiers());
+            return;
+        }
+        if (m_pdf->formHasFocus()) m_pdf->formCommit();  // clicking elsewhere ends editing
+    }
     if (!m_doc->hasText() || (e->modifiers() & Qt::AltModifier)) {
         m_panning = true;
         m_panStart = e->position().toPoint();
@@ -544,7 +579,16 @@ void DocumentView::mousePressEvent(QMouseEvent *e)
 
 void DocumentView::mouseMoveEvent(QMouseEvent *e)
 {
+    if (m_formPress) {
+        // Dragging inside a field selects its text.
+        m_pdf->formMouse(m_pressPage, toPage(m_pressPage, e->position()), PdfDocument::Mouse::Move, e->modifiers());
+        return;
+    }
     if (!(e->buttons() & Qt::LeftButton)) {
+        if (m_pdf && m_pdf->hasForm()) {  // hover feedback on fields
+            const int page = pageAt(e->position());
+            m_pdf->formMouse(page, toPage(page, e->position()), PdfDocument::Mouse::Move, e->modifiers());
+        }
         updateCursor(e->position());
         return;
     }
@@ -565,6 +609,11 @@ void DocumentView::mouseMoveEvent(QMouseEvent *e)
 void DocumentView::mouseReleaseEvent(QMouseEvent *e)
 {
     if (e->button() != Qt::LeftButton) return QAbstractScrollArea::mouseReleaseEvent(e);
+    if (m_formPress) {
+        m_formPress = false;
+        m_pdf->formMouse(m_pressPage, toPage(m_pressPage, e->position()), PdfDocument::Mouse::Release, e->modifiers());
+        return;
+    }
     const bool wasPanning = m_panning;
     m_panning = false;
     updateCursor(e->position());
@@ -582,6 +631,17 @@ void DocumentView::mouseReleaseEvent(QMouseEvent *e)
 
 void DocumentView::mouseDoubleClickEvent(QMouseEvent *e)
 {
+    if (m_pdf && m_pdf->hasForm() && e->button() == Qt::LeftButton) {
+        const int page = pageAt(e->position());
+        const QPointF pt = toPage(page, e->position());
+        if (QRectF(QPointF(0, 0), m_doc->pageSize(page)).contains(pt) && m_pdf->formFieldAt(page, pt) >= 0) {
+            // Selects a word in a text field; the following release goes to the field too.
+            m_pressPage = page;
+            m_formPress = true;
+            m_pdf->formMouse(page, pt, PdfDocument::Mouse::DoubleClick, e->modifiers());
+            return;
+        }
+    }
     if (m_doc->hasText()) return QAbstractScrollArea::mouseDoubleClickEvent(e);
     // Double-click toggles between fit and actual size for images.
     if (m_fit == FitMode::None) setFitMode(FitMode::Page);
@@ -653,8 +713,62 @@ bool DocumentView::viewportEvent(QEvent *e)
     return QAbstractScrollArea::viewportEvent(e);
 }
 
+bool DocumentView::event(QEvent *e)
+{
+    // While a form field is being edited, typing and the standard editing
+    // shortcuts belong to the field rather than to menu commands.
+    if (e->type() == QEvent::ShortcutOverride && formHasFocus()) {
+        auto *k = static_cast<QKeyEvent *>(e);
+        const bool command = k->modifiers() & (Qt::ControlModifier | Qt::MetaModifier);
+        if (!command || k->matches(QKeySequence::Copy) || k->matches(QKeySequence::Cut) ||
+            k->matches(QKeySequence::Paste) || k->matches(QKeySequence::SelectAll) ||
+            k->matches(QKeySequence::Undo) || k->matches(QKeySequence::Redo)) {
+            e->accept();
+            return true;
+        }
+    }
+    return QAbstractScrollArea::event(e);
+}
+
+bool DocumentView::focusNextPrevChild(bool next)
+{
+    // Tab moves between form fields while one is focused.
+    if (formHasFocus()) return false;
+    return QAbstractScrollArea::focusNextPrevChild(next);
+}
+
+bool DocumentView::formKeyPress(QKeyEvent *e)
+{
+    if (!formHasFocus()) return false;
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (e->matches(QKeySequence::Copy) || e->matches(QKeySequence::Cut)) {
+        const QString text = m_pdf->canCopy() ? m_pdf->formSelectedText() : QString();
+        if (!text.isEmpty()) {
+            clipboard->setText(text);
+            if (e->matches(QKeySequence::Cut)) m_pdf->formReplaceSelection(QString());
+        }
+    } else if (e->matches(QKeySequence::Paste)) {
+        m_pdf->formReplaceSelection(clipboard->text());
+    } else if (e->matches(QKeySequence::SelectAll)) {
+        m_pdf->formSelectAll();
+    } else if (e->matches(QKeySequence::Undo)) {
+        m_pdf->formUndo();
+    } else if (e->matches(QKeySequence::Redo)) {
+        m_pdf->formRedo();
+    } else if (e->key() == Qt::Key_Escape) {
+        m_pdf->formCommit();
+    } else if (PdfDocument::isFormKey(e->key())) {
+        m_pdf->formKey(e->key(), e->modifiers());
+        if (e->key() == Qt::Key_Space) m_pdf->formText(QStringLiteral(" "));  // types, or toggles a box
+    } else if (!(e->modifiers() & (Qt::ControlModifier | Qt::MetaModifier))) {
+        m_pdf->formText(e->text());
+    }
+    return true;
+}
+
 void DocumentView::keyPressEvent(QKeyEvent *e)
 {
+    if (formKeyPress(e)) return;
     switch (e->key()) {
     case Qt::Key_Home: goToPage(0); return;
     case Qt::Key_End: goToPage(m_doc->pageCount() - 1); return;

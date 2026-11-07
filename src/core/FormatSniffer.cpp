@@ -14,6 +14,8 @@ SniffedFormat formatForExtension(const QString &ext)
     static const QStringList images = {"png", "jpg", "jpeg", "gif", "webp", "tif", "tiff",
                                        "bmp", "heic", "heif", "ico", "icns", "tga", "jp2"};
     if (ext == "pdf") return SniffedFormat::Pdf;
+    if (ext == "ps") return SniffedFormat::PostScript;
+    if (ext == "eps" || ext == "epsf" || ext == "epsi") return SniffedFormat::Eps;
     if (ext == "rtf") return SniffedFormat::Rtf;
     if (ext == "odt" || ext == "ott") return SniffedFormat::OdfText;
     if (ext == "ods" || ext == "ots" || ext == "fods") return SniffedFormat::OdfSpreadsheet;
@@ -37,6 +39,13 @@ SniffedFormat odfFromMime(const QByteArray &mime, bool flat)
 
 SniffedFormat sniffContent(const QByteArray &head)
 {
+    // PostScript starts with "%!" (sometimes after a Ctrl-D); EPS says
+    // "EPSF" in that first line. DOS EPS binaries have a header of their own.
+    if (head.startsWith("\xC5\xD0\xD3\xC6")) return SniffedFormat::Eps;
+    if (head.startsWith("%!") || head.startsWith("\x04%!")) {
+        const QByteArray first = head.left(qMax(0, int(head.indexOf('\n')))).left(128);
+        return first.contains("EPSF") ? SniffedFormat::Eps : SniffedFormat::PostScript;
+    }
     if (head.left(1024).contains("%PDF-")) return SniffedFormat::Pdf;
     QByteArray trimmed = head;
     if (trimmed.startsWith("\xEF\xBB\xBF")) trimmed.remove(0, 3);
@@ -94,7 +103,10 @@ SniffResult sniffFile(const QString &path)
         byContent = SniffedFormat::Svg;  // compressed svgz
 
     r.format = byContent != SniffedFormat::Unknown ? byContent : SniffedFormat::Unknown;
+    // EPS saved as .ps (or the reverse) is not worth a warning.
+    const auto family = [](SniffedFormat f) { return f == SniffedFormat::Eps ? SniffedFormat::PostScript : f; };
+    r.knownExtension = byExt != SniffedFormat::Unknown;
     r.extensionMismatch = byContent != SniffedFormat::Unknown && byExt != SniffedFormat::Unknown &&
-                          byExt != byContent;
+                          family(byExt) != family(byContent);
     return r;
 }

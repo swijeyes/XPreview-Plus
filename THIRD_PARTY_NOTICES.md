@@ -16,6 +16,18 @@ in `licenses/` (and in the app bundle or zip).
 | Arimo, Tinos, Cousine (ChromeOS core fonts 1.31) | Metric-compatible substitutes for Arial, Times New Roman and Courier New, and same-design stand-ins for Liberation Sans/Serif/Mono | Apache-2.0 | Compatible. Shipped unmodified. `licenses/Apache-2.0.txt` |
 | [Carlito](https://github.com/googlefonts/carlito), [Caladea](https://github.com/huertatipografica/Caladea) | Substitutes for Calibri, Cambria | SIL OFL 1.1 | Shipped unmodified as separate font files (an aggregate, not combined with the code). `licenses/LICENSE-Carlito.txt`, `licenses/LICENSE-Caladea.txt` |
 
+## macOS build: PDF encryption and PostScript
+
+| Component | Use | License | Compatibility |
+|---|---|---|---|
+| [qpdf](https://github.com/qpdf/qpdf) 12.x | Writing password-protected (AES-256) PDFs | Apache-2.0 | Compatible. Linked dynamically. `licenses/Apache-2.0.txt` |
+| [Ghostscript](https://ghostscript.com) 10.08 | Converting PostScript and EPS to PDF, run as a separate sandboxed program (`Contents/Helpers/gs`) with its resource files (`Contents/Resources/ghostscript/`) | AGPL-3.0-or-later | Same license as XPreview+. Shipped unmodified. Corresponding source: <https://github.com/ArtifexSoftware/ghostpdl-downloads/releases> (ghostscript-10.08.0), or the Homebrew formula it was built from. `licenses/ghostscript/` |
+| Ghostscript's libraries (jbig2dec, libtiff, libpng, libjpeg-turbo, Little CMS, OpenJPEG, libidn, fontconfig, FreeType, Tesseract, Leptonica, libarchive) | Image codecs, fonts, OCR support inside Ghostscript | AGPL-3.0 (jbig2dec), BSD/MIT/IJG, LGPL-3.0 (libidn), FTL, Apache-2.0 (Tesseract), BSD-2-Clause (Leptonica, libarchive) | Compatible. Linked dynamically. License files in `Contents/Resources/licenses/<package>/` |
+| URW base 35 fonts (Ghostscript's font set) | Standard PostScript fonts | AGPL-3.0 with font exception | Shipped unmodified with Ghostscript |
+
+The Windows build opens PostScript and EPS when Ghostscript (`gswin64c.exe`) is
+installed, and does not write encrypted PDFs unless built with qpdf.
+
 ## Windows build only
 
 | Component | License | Notes |

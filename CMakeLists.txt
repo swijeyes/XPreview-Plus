@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(XPreview VERSION 1.2.0 LANGUAGES C CXX)
+project(XPreview VERSION 2.1.0 LANGUAGES C CXX)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 set(APP_DISPLAY_NAME "XPreview+")
@@ -31,6 +31,14 @@ else()
     if(NOT XPREVIEW_SANITIZE AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_definitions(_FORTIFY_SOURCE=2)
     endif()
+    # Zero-initialise stack variables (no stale data from uninitialised
+    # reads), and bounds-check standard containers in libc++/libstdc++.
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag(-ftrivial-auto-var-init=zero XPREVIEW_HAVE_AUTO_VAR_INIT)
+    if(XPREVIEW_HAVE_AUTO_VAR_INIT)
+        add_compile_options(-ftrivial-auto-var-init=zero)
+    endif()
+    add_compile_definitions(_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST _GLIBCXX_ASSERTIONS)
 endif()
 if(XPREVIEW_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
@@ -47,6 +55,9 @@ if(NOT miniz_FOUND)
     target_include_directories(miniz_vendored PUBLIC "${MINIZ_SOURCE_DIR}")
     add_library(miniz::miniz ALIAS miniz_vendored)
 endif()
+
+# qpdf (optional): writes encrypted PDFs, which PDFium cannot.
+find_package(qpdf CONFIG QUIET)
 
 # PDFium: prebuilt binaries (https://github.com/bblanchon/pdfium-binaries).
 # Run scripts/fetch-deps.sh, or point PDFIUM_DIR at an extracted package.
@@ -68,6 +79,8 @@ add_library(xpreview_core STATIC
     src/core/FormatSniffer.cpp
     src/core/SafeImage.cpp
     src/pdf/PdfDocument.cpp
+    src/pdf/PdfSecurity.cpp
+    src/ps/PostScriptConverter.cpp
     src/image/ImageDocument.cpp
     src/flow/FlowBuilder.cpp
     src/flow/FlowDocument.cpp
@@ -90,6 +103,13 @@ target_compile_definitions(xpreview_core
 target_link_libraries(xpreview_core PUBLIC
     Qt6::Core Qt6::Gui Qt6::Svg Qt6::PrintSupport Qt6::Concurrent
     miniz::miniz ${PDFIUM_LIBRARY})
+if(TARGET qpdf::libqpdf)
+    target_link_libraries(xpreview_core PRIVATE qpdf::libqpdf)
+    target_compile_definitions(xpreview_core PRIVATE XPREVIEW_HAVE_QPDF)
+    message(STATUS "qpdf ${qpdf_VERSION}: encrypted PDF saving enabled")
+else()
+    message(STATUS "qpdf not found: encrypted PDFs can be opened but not saved")
+endif()
 
 # UI widgets as a library so the UI regression tests can link them.
 add_library(xpreview_ui STATIC
@@ -97,6 +117,7 @@ add_library(xpreview_ui STATIC
     src/ui/Appearance.cpp
     src/ui/AppStyle.cpp
     src/ui/PreferencesDialog.cpp
+    src/ui/ProtectionDialog.cpp
     src/ui/Preferences.cpp
     src/ui/DocumentTab.cpp
     src/ui/DocumentView.cpp
@@ -183,6 +204,7 @@ add_test(NAME importers COMMAND xpreview-tests)
 
 add_executable(xpreview-ui-tests tests/tst_ui.cpp)
 target_link_libraries(xpreview-ui-tests PRIVATE xpreview_ui Qt6::Test)
+target_compile_definitions(xpreview-ui-tests PRIVATE XPREVIEW_TEST_CORPUS="${CMAKE_SOURCE_DIR}/tests/corpus")
 set_target_properties(xpreview-ui-tests PROPERTIES BUILD_RPATH "${PDFIUM_DIR}/lib")
 # Headless; Fusion has classic (space-taking) scrollbars, unlike macOS overlays.
 add_test(NAME ui COMMAND xpreview-ui-tests -platform offscreen)

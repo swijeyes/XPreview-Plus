@@ -6,6 +6,7 @@
 #include "core/Document.h"
 
 #include <QCache>
+#include <QHash>
 #include <QObject>
 #include <QSet>
 
@@ -29,6 +30,12 @@ public:
     QImage thumbnail(int page, int width);
     // Drops queued (not yet started) tile jobs, e.g. after a zoom change.
     void cancelPending();
+    // The page's look changed (e.g. a form field was edited): its cached
+    // images stay on screen until fresh ones replace them.
+    void invalidatePage(int page);
+    // The document's pages changed (added, removed, reordered): forgets
+    // everything, including results of jobs still running.
+    void reset();
 
     // Stops all rendering: drops queued jobs and waits for running ones.
     // Must run before the QApplication is destroyed, or a job still drawing
@@ -41,9 +48,12 @@ signals:
 
 private:
     struct Shared;
+    void deliver(QCache<QString, QImage> &cache, const QString &id, int page, int revision, const QImage &img);
     DocumentPtr m_doc;
     std::shared_ptr<Shared> m_shared;
     QCache<QString, QImage> m_tiles;
     QCache<QString, QImage> m_thumbs;
     QSet<QString> m_pending;
+    QSet<QString> m_stale;          // cached, but due for a re-render
+    QHash<int, int> m_pageRevision;  // bumped by invalidatePage()
 };

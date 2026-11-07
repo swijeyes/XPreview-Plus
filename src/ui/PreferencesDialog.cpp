@@ -41,22 +41,15 @@ QIcon themeSwatch(Appearance::Theme theme)
 }
 
 // A small preview of a flat scroll bar at a given arrow weight (1..4), in the
-// current Modern mode (light or dark). Mirrors the weights AppStyle paints.
-QIcon scrollbarSwatch(int weight, bool dark)
+// current Modern style. Uses the colours AppStyle paints with.
+QIcon scrollbarSwatch(int weight)
 {
-    struct W { QColor fill, glyph; };
-    static const W light[4] = {{QColor(0xdc, 0xeb, 0xff), QColor(0x0a, 0x84, 0xff)},
-                               {QColor(0xb6, 0xda, 0xff), QColor(0x0a, 0x84, 0xff)},
-                               {QColor(0x78, 0xbb, 0xff), QColor(0xff, 0xff, 0xff)},
-                               {QColor(0x0a, 0x84, 0xff), QColor(0xff, 0xff, 0xff)}};
-    static const W dark_[4] = {{QColor(0x36, 0x36, 0x38), QColor(0xe9, 0xe9, 0xee)},
-                               {QColor(0x50, 0x50, 0x53), QColor(0xe9, 0xe9, 0xee)},
-                               {QColor(0x7b, 0x7b, 0x7f), QColor(0x1c, 0x1c, 0x1e)},
-                               {QColor(0xc9, 0xc9, 0xcf), QColor(0x1c, 0x1c, 0x1e)}};
-    const W &w = (dark ? dark_ : light)[qBound(1, weight, 4) - 1];
-    const QColor track = dark ? QColor(0x20, 0x20, 0x22) : QColor(0xee, 0xf0, 0xf3);
-    const QColor thumb = dark ? QColor(0x48, 0x48, 0x4a) : QColor(0xc2, 0xc2, 0xc8);
-    const QColor frame = dark ? QColor(0x3a, 0x3a, 0x3c) : QColor(0xd2, 0xd2, 0xd7);
+    const Appearance *a = Appearance::instance();
+    const bool dark = a->isDark();
+    const Appearance::ArrowColors w = a->arrowColors(weight);
+    const QColor track = a->scrollTrack();
+    const QColor thumb = a->scrollThumb();
+    const QColor frame = a->hairline();
     const QColor div = dark ? QColor(255, 255, 255, 42) : QColor(0, 0, 0, 36);
 
     QIcon icon;
@@ -179,7 +172,27 @@ QWidget *PreferencesDialog::buildGeneralTab()
     mode->addItem(tr("Dark"), int(Appearance::Mode::Dark));
     mode->setCurrentIndex(mode->findData(int(a->mode())));
     modeRow->addWidget(mode);
+    // How it looks when dark: neutral Graphite, or Dracula's purple-grey.
+    auto *darkLabel = new QLabel(tr("Dark style:"), modeBox);
+    auto *darkStyle = new QComboBox(modeBox);
+    darkStyle->addItem(tr("Graphite"), int(Appearance::DarkStyle::Graphite));
+    darkStyle->addItem(tr("Dracula"), int(Appearance::DarkStyle::Dracula));
+    darkStyle->setCurrentIndex(darkStyle->findData(int(a->darkStyle())));
+    darkStyle->setToolTip(tr("Used whenever the Modern look is dark: in Dark mode, or in Automatic mode while the system is dark."));
+    modeRow->addSpacing(12);
+    modeRow->addWidget(darkLabel);
+    modeRow->addWidget(darkStyle);
     modeRow->addStretch();
+    auto updateDarkStyle = [mode, darkLabel, darkStyle] {
+        const bool light = Appearance::Mode(mode->currentData().toInt()) == Appearance::Mode::Light;
+        darkLabel->setEnabled(!light);
+        darkStyle->setEnabled(!light);
+    };
+    updateDarkStyle();
+    connect(darkStyle, &QComboBox::currentIndexChanged, this, [a, darkStyle] {
+        a->setDarkStyle(Appearance::DarkStyle(darkStyle->currentData().toInt()));
+    });
+    connect(mode, &QComboBox::currentIndexChanged, this, updateDarkStyle);
 
     // Modern sub-choice: scroll-bar arrow weight, shown as live previews.
     auto *scrollBox = new QWidget(page);
@@ -204,8 +217,7 @@ QWidget *PreferencesDialog::buildGeneralTab()
     }
     scrollRow->addStretch();
     auto refreshScrollSwatches = [scrollTiles] {
-        const bool dark = Appearance::instance()->isDark();
-        for (int i = 0; i < scrollTiles.size(); ++i) scrollTiles[i]->setIcon(scrollbarSwatch(i + 1, dark));
+        for (int i = 0; i < scrollTiles.size(); ++i) scrollTiles[i]->setIcon(scrollbarSwatch(i + 1));
     };
     refreshScrollSwatches();
     connect(scrollGroup, &QButtonGroup::idToggled, this, [prefs](int id, bool on) {

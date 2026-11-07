@@ -3,6 +3,8 @@
 
 #include "InfoBar.h"
 
+#include "Appearance.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -12,10 +14,16 @@ InfoBar::InfoBar(QWidget *parent) : QFrame(parent)
 {
     setObjectName(QStringLiteral("InfoBar"));
     const bool dark = palette().color(QPalette::Window).lightness() < 128;
-    setStyleSheet(dark ? QStringLiteral("#InfoBar { background: #4a3f1c; border-bottom: 1px solid #6b5a22; }"
-                                        "#InfoBar QLabel { color: #f2e6c2; }")
-                       : QStringLiteral("#InfoBar { background: #fff4cc; border-bottom: 1px solid #e6d28a; }"
-                                        "#InfoBar QLabel { color: #4d3d00; }"));
+    if (Appearance::instance()->isDracula()) {
+        // Dracula's yellow on its current-line grey.
+        setStyleSheet(QStringLiteral("#InfoBar { background: #44475a; border-bottom: 1px solid #191a21; }"
+                                     "#InfoBar QLabel { color: #f1fa8c; }"));
+    } else {
+        setStyleSheet(dark ? QStringLiteral("#InfoBar { background: #4a3f1c; border-bottom: 1px solid #6b5a22; }"
+                                            "#InfoBar QLabel { color: #f2e6c2; }")
+                           : QStringLiteral("#InfoBar { background: #fff4cc; border-bottom: 1px solid #e6d28a; }"
+                                            "#InfoBar QLabel { color: #4d3d00; }"));
+    }
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(12, 6, 6, 6);
     m_label = new QLabel(this);

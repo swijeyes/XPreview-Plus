@@ -13,25 +13,6 @@
 
 namespace {
 
-// Flat scroll-bar arrow-button weights, 1 (lightest) to 4 (solid): the button
-// fill and the arrow glyph, for the Light and Dark modern themes. These mirror
-// the weights offered by XTunes+.
-struct ArrowWeight {
-    QColor fill, glyph;
-};
-const ArrowWeight kLightArrows[4] = {
-    {QColor(0xdc, 0xeb, 0xff), QColor(0x0a, 0x84, 0xff)},
-    {QColor(0xb6, 0xda, 0xff), QColor(0x0a, 0x84, 0xff)},
-    {QColor(0x78, 0xbb, 0xff), QColor(0xff, 0xff, 0xff)},
-    {QColor(0x0a, 0x84, 0xff), QColor(0xff, 0xff, 0xff)},
-};
-const ArrowWeight kDarkArrows[4] = {
-    {QColor(0x36, 0x36, 0x38), QColor(0xe9, 0xe9, 0xee)},
-    {QColor(0x50, 0x50, 0x53), QColor(0xe9, 0xe9, 0xee)},
-    {QColor(0x7b, 0x7b, 0x7f), QColor(0x1c, 0x1c, 0x1e)},
-    {QColor(0xc9, 0xc9, 0xcf), QColor(0x1c, 0x1c, 0x1e)},
-};
-
 constexpr int kScrollBarExtent = 15;
 constexpr int kArrowLength = 16;
 constexpr int kSliderMin = 24;
@@ -86,7 +67,7 @@ void paintArrowButton(QPainter *p, const QRect &r, Qt::Orientation o, bool forwa
     if (flat) {
         // Flat: fill and glyph follow the chosen scroll-bar weight (1..4).
         const int w = qBound(1, Preferences::instance()->scrollbarStyle(), 4) - 1;
-        const ArrowWeight &aw = ap->isDark() ? kDarkArrows[w] : kLightArrows[w];
+        const Appearance::ArrowColors aw = ap->arrowColors(w + 1);
         p->fillRect(r, pressed ? aw.fill.darker(120) : aw.fill);
         p->setPen(ap->hairline());
         if (o == Qt::Horizontal) p->drawLine(r.topLeft(), r.bottomLeft());
@@ -205,10 +186,10 @@ void AppStyle::paintThumb(QPainter *p, const QRectF &r, Qt::Orientation o, Appea
 {
     if (r.isEmpty()) return;
     // Flat look: a solid rounded capsule, no outline or gloss.
-    if (theme == Appearance::Theme::FlatLight || theme == Appearance::Theme::FlatDark) {
+    if (Appearance::isFlat(theme)) {
         p->save();
         p->setRenderHint(QPainter::Antialiasing);
-        QColor fill = theme == Appearance::Theme::FlatDark ? QColor(0x48, 0x48, 0x4a) : QColor(0xc2, 0xc2, 0xc8);
+        QColor fill = Appearance::instance()->scrollThumb();
         if (pressed) fill = fill.darker(120);
         const double radius = qMin(r.width(), r.height()) / 2;
         p->setPen(Qt::NoPen);

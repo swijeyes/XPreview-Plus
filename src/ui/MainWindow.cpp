@@ -11,6 +11,8 @@
 #include "core/DocumentLoader.h"
 #include "core/Exporter.h"
 #include "image/ImageDocument.h"
+#include "pdf/PdfDocument.h"
+#include "pdf/PdfSecurity.h"
 #include "PreferencesDialog.h"
 
 #include <QActionGroup>
@@ -44,6 +46,7 @@
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
@@ -139,6 +142,7 @@ protected:
         const bool active = isActiveWindow();
         const bool down = isDown() || isChecked();
         const double radius = 4;
+        if (Appearance::instance()->isDracula()) return paintFlat(p, down);
         // Bottom pixel is left for the embossed highlight.
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -1.5);
         // Inner ends extend past the button so only outer corners are round.
@@ -189,6 +193,43 @@ protected:
     }
 
 private:
+    // Dracula: flat raised segments without gloss.
+    void paintFlat(QPainter &p, bool down)
+    {
+        const Appearance *a = Appearance::instance();
+        const double radius = 5;
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -1.5);
+        QRectF shape = r;
+        if (m_segment == First || m_segment == Middle) shape.setRight(r.right() + radius + 2);
+        if (m_segment == Middle || m_segment == Last) shape.setLeft(r.left() - radius - 2);
+        p.setClipRect(rect());
+        QColor fill = palette().color(QPalette::Button);
+        if (down) fill = a->scrollThumb();
+        else if (underMouse() && isEnabled()) fill = fill.lighter(115);
+        p.setPen(a->chromeBorder());
+        p.setBrush(fill);
+        p.drawRoundedRect(shape, radius, radius);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        if (m_segment == First || m_segment == Middle) p.drawLine(QPointF(width() - 1, r.top()), QPointF(width() - 1, r.bottom()));
+        QRect content = rect().adjusted(0, 0, 0, -1);
+        if (popupMode() == MenuButtonPopup && menu()) {
+            QStyleOptionToolButton opt;
+            initStyleOption(&opt);
+            const QRect menuRect = style()->subControlRect(QStyle::CC_ToolButton, &opt, QStyle::SC_ToolButtonMenu, this);
+            content.setRight(menuRect.left());
+            const QPointF c(menuRect.center().x() + 0.5, r.center().y() + 1);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(isEnabled() ? a->text() : a->dimText());
+            p.drawPolygon(QPolygonF{c + QPointF(-3, -1.5), c + QPointF(3, -1.5), c + QPointF(0, 2)});
+        }
+        const QSize s = iconSize();
+        const QRect iconRect(content.center().x() - s.width() / 2 + 1, content.center().y() - s.height() / 2 + 1,
+                             s.width(), s.height());
+        icon().paint(&p, iconRect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled,
+                     isChecked() ? QIcon::On : QIcon::Off);
+    }
+
     Segment m_segment;
 };
 
@@ -281,6 +322,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     statusBar()->addPermanentWidget(m_zoomBox);
     statusBar()->setSizeGripEnabled(false);
 
+    m_geometryTimer = new QTimer(this);
+    m_geometryTimer->setSingleShot(true);
+    m_geometryTimer->setInterval(500);
+    connect(m_geometryTimer, &QTimer::timeout, this, &MainWindow::saveWindowGeometry);
     QSettings s;
     if (!restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray())) resize(1100, 820);
     updateUi();
@@ -316,13 +361,12 @@ void MainWindow::updateTabBarStyle()
     }
     // Flat tabs: the selected one lifts to the surface colour with an accent
     // underline; the rest sit in the window chrome.
-    const bool dark = a->isDark();
     const QString chrome = a->windowChrome().name();
     const QString border = a->chromeBorder().name();
-    const QString text = dark ? QStringLiteral("#e5e5ea") : QStringLiteral("#1d1d1f");
-    const QString dim = dark ? QStringLiteral("#8e8e93") : QStringLiteral("#86868b");
-    const QString surface = dark ? QStringLiteral("#1c1c1e") : QStringLiteral("#ffffff");
-    const QString accent = QStringLiteral("#0a84ff");
+    const QString text = a->text().name();
+    const QString dim = a->dimText().name();
+    const QString surface = a->fieldBackground().name();
+    const QString accent = a->accent().name();
     m_tabs->tabBar()->setStyleSheet(
         QStringLiteral("QTabBar { background: %1; }"
                        "QTabBar::tab { color: %5; padding: 5px 20px; min-width: 80px;"
@@ -331,6 +375,27 @@ void MainWindow::updateTabBarStyle()
                        "QTabBar::tab:!selected { color: %6; background: %1; }"
                        "QTabBar::tab:selected { color: %3; background: %4; border-bottom: 2px solid %7; }")
             .arg(chrome, border, text, surface, text, dim, accent));
+}
+
+void MainWindow::updateSearchStyle()
+{
+    if (!m_search) return;
+    Appearance *a = Appearance::instance();
+    if (a->isDracula()) {
+        // Dracula: a dark field with a purple focus ring.
+        m_search->setStyleSheet(
+            QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 10px; padding: 0 6px; }"
+                           "QLineEdit:focus { border: 2px solid %4; padding: 0 5px; }"
+                           "QLineEdit:disabled { background: %5; color: %6; border-color: %3; }")
+                .arg(a->fieldBackground().name(), a->text().name(), a->hairline().name(), a->accent().name(),
+                     a->windowChrome().name(), a->dimText().name()));
+        return;
+    }
+    // Rounded search field, as in classic toolbars.
+    m_search->setStyleSheet(QStringLiteral(
+        "QLineEdit { background: white; border: 1px solid #6f6f6f; border-radius: 10px; padding: 0 6px; }"
+        "QLineEdit:focus { border: 2px solid palette(highlight); padding: 0 5px; }"
+        "QLineEdit:disabled { background: #ececec; border-color: #9a9a9a; }"));
 }
 
 void MainWindow::createActions()
@@ -345,10 +410,37 @@ void MainWindow::createActions()
 
     m_open = make(tr("Open…"), QKeySequence::Open, [this] { openDialog(); });
     m_close = make(tr("Close Tab"), QKeySequence::Close, [this] { closeTab(m_tabs->currentIndex()); });
+    auto tab = [this] { return currentTab(); };
+    m_save = make(tr("Save"), QKeySequence::Save, [this, tab] { if (DocumentTab *t = tab()) saveTab(t); });
+    m_protect = make(tr("Password Protection…"), {}, [tab] { if (DocumentTab *t = tab()) t->editProtection(); });
+    m_saveAs = make(tr("Save As…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), [this] { saveAs(); });
+    m_undo = make(tr("Undo"), QKeySequence::Undo, [tab] {
+        DocumentTab *t = tab();
+        if (!t) return;
+        if (t->view() && t->view()->formHasFocus()) t->pdf()->formUndo();
+        else t->undo();
+    });
+    m_redo = make(tr("Redo"), QKeySequence::Redo, [tab] {
+        DocumentTab *t = tab();
+        if (!t) return;
+        if (t->view() && t->view()->formHasFocus()) t->pdf()->formRedo();
+        else t->redo();
+    });
+    m_insertFile = make(tr("Page from File…"), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_I),
+                        [tab] { if (DocumentTab *t = tab()) t->insertFromFileDialog(); });
+    m_insertBlank = make(tr("Blank Page"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
+                         [tab] { if (DocumentTab *t = tab()) t->insertBlankPage(); });
+    m_deletePages = make(tr("Delete Page"), {}, [tab] { if (DocumentTab *t = tab()) t->deletePages(); });
+    m_rotPageLeft = make(tr("Rotate Page Left"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L),
+                         [tab] { if (DocumentTab *t = tab()) t->rotatePages(-1); });
+    m_rotPageRight = make(tr("Rotate Page Right"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R),
+                          [tab] { if (DocumentTab *t = tab()) t->rotatePages(1); });
+    m_exportPages = make(tr("Export Selected Pages…"), {}, [tab] { if (DocumentTab *t = tab()) t->exportPages(); });
     m_export = make(tr("Export as PDF…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this] { exportPdf(); });
     m_print = make(tr("Print…"), QKeySequence::Print, [this] { print(); });
     m_openDefault = make(tr("Open in Default App"), {}, [this] {
-        if (DocumentTab *t = currentTab()) QDesktopServices::openUrl(QUrl::fromLocalFile(t->path()));
+        if (DocumentTab *t = currentTab(); t && t->canOpenInDefaultApp())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(t->path()));
     });
 #ifdef Q_OS_MACOS
     m_reveal = make(tr("Reveal in Finder"), {}, [this] {
@@ -426,6 +518,9 @@ void MainWindow::createMenus()
     m_recentMenu = file->addMenu(tr("Open Recent"));
     file->addSeparator();
     file->addAction(m_close);
+    file->addAction(m_save);
+    file->addAction(m_saveAs);
+    file->addAction(m_protect);
     file->addSeparator();
     file->addAction(m_export);
     file->addAction(m_print);
@@ -436,7 +531,15 @@ void MainWindow::createMenus()
     quit->setMenuRole(QAction::QuitRole);
 
     QMenu *edit = menuBar()->addMenu(tr("&Edit"));
+    edit->addAction(m_undo);
+    edit->addAction(m_redo);
+    edit->addSeparator();
     edit->addAction(m_copy);
+    edit->addSeparator();
+    QMenu *insert = edit->addMenu(tr("Insert"));
+    insert->addAction(m_insertFile);
+    insert->addAction(m_insertBlank);
+    edit->addAction(m_deletePages);
     edit->addSeparator();
     edit->addAction(m_find);
     edit->addAction(m_findNext);
@@ -468,6 +571,10 @@ void MainWindow::createMenus()
     tools->addAction(m_rotLeft);
     tools->addAction(m_rotRight);
     tools->addSeparator();
+    tools->addAction(m_rotPageLeft);
+    tools->addAction(m_rotPageRight);
+    tools->addAction(m_exportPages);
+    tools->addSeparator();
     tools->addAction(m_inspector);
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
@@ -476,16 +583,17 @@ void MainWindow::createMenus()
         // "Appropriate Legal Notices" required by the GNU AGPL, section 0/5(d).
         QMessageBox::about(
             this, tr("About %1").arg(name),
-            tr("<h3>%1 %2</h3><p>A fast viewer for PDF, images, RTF and OpenDocument text.</p>"
+            tr("<h3>%1 %2</h3><p>A fast viewer for PDF, PostScript, EPS, images, RTF and "
+               "OpenDocument text, with PDF form filling, page editing and password protection.</p>"
                "<p>%4</p>"
                "<p>This program is free software: you can redistribute it and/or modify it under "
                "the terms of the GNU Affero General Public License as published by the Free "
                "Software Foundation, either version 3 of the License, or (at your option) any "
                "later version.</p><p>This program comes with <b>ABSOLUTELY NO WARRANTY</b>; see "
                "the license for details.</p><p>Source code: <a href=\"%3\">%3</a></p>"
-               "<p>Includes Qt (LGPLv3), PDFium (BSD-3-Clause/Apache-2.0), miniz (MIT), the "
-               "Arimo, Tinos and Cousine fonts (Apache-2.0) and the Carlito and Caladea fonts "
-               "(SIL OFL 1.1). See THIRD_PARTY_NOTICES.md.</p>")
+               "<p>Includes Qt (LGPLv3), PDFium (BSD-3-Clause/Apache-2.0), qpdf (Apache-2.0), "
+               "Ghostscript (AGPLv3), miniz (MIT), the Arimo, Tinos and Cousine fonts (Apache-2.0) "
+               "and the Carlito and Caladea fonts (SIL OFL 1.1). See THIRD_PARTY_NOTICES.md.</p>")
                 .arg(name.toHtmlEscaped(), QApplication::applicationVersion(),
                      QStringLiteral(XPREVIEW_SOURCE_URL),
                      QStringLiteral(XPREVIEW_COPYRIGHT).replace(QStringLiteral("(C)"), QStringLiteral("\u00a9"))));
@@ -542,11 +650,8 @@ void MainWindow::createToolBar()
     m_search->setClearButtonEnabled(true);
     m_search->setFixedSize(200, 22);
     m_search->setAttribute(Qt::WA_MacShowFocusRect, false);
-    // Rounded search field, as in classic toolbars.
-    m_search->setStyleSheet(QStringLiteral(
-        "QLineEdit { background: white; border: 1px solid #6f6f6f; border-radius: 10px; padding: 0 6px; }"
-        "QLineEdit:focus { border: 2px solid palette(highlight); padding: 0 5px; }"
-        "QLineEdit:disabled { background: #ececec; border-color: #9a9a9a; }"));
+    updateSearchStyle();
+    connect(Appearance::instance(), &Appearance::themeChanged, this, &MainWindow::updateSearchStyle);
     tb->addWidget(toolGroup(tr("Search"), {m_search}, this));
     gap(4);
     // Empty toolbar space and captions move the window (handleChromeMouse).
@@ -588,11 +693,33 @@ void MainWindow::updateUi()
                        m_findNext, m_findPrev})
         a->setEnabled(loaded);
     m_close->setEnabled(t);
-    m_openDefault->setEnabled(t);
+    const bool editable = loaded && t->isEditable();
+    const bool formFocus = editable && t->view() && t->view()->formHasFocus();
+    const int pageCount = loaded ? t->document()->pageCount() : 0;
+    const int targets = editable ? int(t->targetPages().size()) : 0;
+    PdfDocument *pdf = loaded ? t->pdf() : nullptr;
+    const bool pagesEditable = editable && t->canEditPages();
+    m_save->setEnabled(editable && (t->isModified() || t->needsSaveAs()));
+    m_saveAs->setEnabled(editable);
+    m_protect->setEnabled(pdf && !pdf->isRestricted() && PdfSecurity::available());
+    m_print->setEnabled(loaded && (!pdf || pdf->canPrint()));
+    m_undo->setEnabled(formFocus || (editable && t->canUndo()));
+    m_redo->setEnabled(formFocus || (editable && t->canRedo()));
+    m_undo->setText(formFocus || !editable ? tr("Undo") : t->undoText());
+    m_redo->setText(formFocus || !editable ? tr("Redo") : t->redoText());
+    for (QAction *a : {m_insertFile, m_insertBlank, m_rotPageLeft, m_rotPageRight}) a->setEnabled(pagesEditable);
+    m_exportPages->setEnabled(pagesEditable && pdf->canCopy());
+    m_deletePages->setEnabled(pagesEditable && targets < pageCount);
+    m_deletePages->setText(targets > 1 ? tr("Delete %1 Pages").arg(targets) : tr("Delete Page"));
+    m_rotPageLeft->setText(targets > 1 ? tr("Rotate %1 Pages Left").arg(targets) : tr("Rotate Page Left"));
+    m_rotPageRight->setText(targets > 1 ? tr("Rotate %1 Pages Right").arg(targets) : tr("Rotate Page Right"));
+    m_exportPages->setText(targets > 1 ? tr("Export %1 Pages as PDF…").arg(targets) : tr("Export Page as PDF…"));
+    m_openDefault->setEnabled(t && t->canOpenInDefaultApp());
     m_reveal->setEnabled(t);
     m_search->setEnabled(loaded && t->document()->hasText());
     m_copy->setEnabled(loaded && ((t->view() && t->view()->hasSelection()) ||
-                                  t->document()->kind() == DocumentKind::Image));
+                                  t->document()->kind() == DocumentKind::Image) &&
+                       (!pdf || pdf->canCopy()));
     m_hideSidebar->setChecked(m_sidebarMode == 0);
     m_thumbs->setChecked(m_sidebarMode == 1);
     m_toc->setChecked(m_sidebarMode == 2);
@@ -600,21 +727,28 @@ void MainWindow::updateUi()
 
     if (!t) {
         setWindowTitle(QApplication::applicationDisplayName());
+        setWindowModified(false);
         setWindowFilePath({});
         m_pageLabel->clear();
         m_searchStatus->clear();
         return;
     }
     setWindowFilePath(t->path());
-    setWindowTitle(t->title());
+    // "[*]" shows the modified marker (the dot in the close button on macOS).
+#ifdef Q_OS_MACOS
+    setWindowTitle(t->title() + (t->isModified() ? tr(" — Edited") : QString()) + QStringLiteral("[*]"));
+#else
+    setWindowTitle(t->title() + QStringLiteral("[*]"));
+#endif
+    setWindowModified(t->isModified());
     if (!loaded) {
         m_pageLabel->setText(tr("Loading…"));
         return;
     }
     const int pages = t->document()->pageCount();
     QString page = pages > 1 ? tr("Page %1 of %2").arg(t->view()->currentPage() + 1).arg(pages)
-                             : documentKindName(t->document()->kind());
-    if (t->sniff().extensionMismatch) page += tr("  •  detected as %1").arg(documentKindName(t->document()->kind()));
+                             : t->document()->kindName();
+    if (t->sniff().extensionMismatch) page += tr("  •  detected as %1").arg(t->document()->kindName());
     m_pageLabel->setText(page);
     if (!m_zoomBox->lineEdit()->hasFocus())
         m_zoomBox->setEditText(QStringLiteral("%1%").arg(qRound(t->view()->zoom() * 100)));
@@ -661,17 +795,85 @@ void MainWindow::openFile(const QString &path)
         if (i >= 0 && tab->sniff().extensionMismatch)
             m_tabs->setTabToolTip(i, QStringLiteral("<p>%1<br>%2</p>")
                                          .arg(tab->path().toHtmlEscaped(),
-                                              tr("Detected as %1").arg(documentKindName(tab->document()->kind()))));
+                                              tr("Detected as %1").arg(tab->document()->kindName())));
         if (tab == currentTab()) updateUi();
     });
     connect(tab, &DocumentTab::exportRequested, this, [this] { exportPdf(); });
+    connect(tab, &DocumentTab::modifiedChanged, this, [this, tab] {
+        updateTabText(tab);
+        if (tab == currentTab()) updateUi();
+    });
+    connect(tab, &DocumentTab::pathChanged, this, [this, tab] {
+        updateTabText(tab);
+        addRecent(tab->path());
+        if (tab == currentTab()) updateUi();
+    });
 
+    addRecent(abs);
+    updateUi();
+}
+
+void MainWindow::addRecent(const QString &path)
+{
     QStringList recent = recentFiles();
-    recent.removeAll(abs);
-    recent.prepend(abs);
+    recent.removeAll(path);
+    recent.prepend(path);
     QSettings().setValue(QStringLiteral("recentFiles"), recent.mid(0, 12));
     updateRecentMenu();
-    updateUi();
+}
+
+void MainWindow::updateTabText(DocumentTab *tab)
+{
+    const int i = m_tabs->indexOf(tab);
+    if (i < 0) return;
+    m_tabs->setTabText(i, tab->isModified() ? tab->title() + QStringLiteral(" \u2022") : tab->title());
+    m_tabs->setTabToolTip(i, QStringLiteral("<p>%1</p>").arg(tab->path().toHtmlEscaped()));
+}
+
+bool MainWindow::maybeSave(DocumentTab *tab)
+{
+    if (!tab || !tab->isModified()) return true;
+    m_tabs->setCurrentWidget(tab);
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setTextFormat(Qt::PlainText);
+    box.setText(tr("Do you want to save the changes made to the document “%1”?").arg(tab->title()));
+    box.setInformativeText(tr("Your changes will be lost if you don’t save them."));
+    box.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Save);
+    switch (box.exec()) {
+    case QMessageBox::Save: return saveTab(tab);
+    case QMessageBox::Discard: return true;
+    default: return false;
+    }
+}
+
+bool MainWindow::saveTab(DocumentTab *tab)
+{
+    if (!tab->needsSaveAs()) return tab->save();
+    m_tabs->setCurrentWidget(tab);
+    return saveAs();
+}
+
+bool MainWindow::saveAs()
+{
+    DocumentTab *t = currentTab();
+    if (!t || !t->isEditable()) return false;
+    // A converted file is suggested as a PDF next to it.
+    const QFileInfo fi(t->path());
+    const QString suggested = t->needsSaveAs() ? fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() + QStringLiteral(".pdf")
+                                               : t->path();
+    QString path = QFileDialog::getSaveFileName(this, tr("Save As"), suggested, tr("PDF document (*.pdf)"));
+    if (path.isEmpty()) return false;
+    if (!path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) path += QStringLiteral(".pdf");
+    // Another tab showing that file would no longer match it.
+    for (int i = 0; i < m_tabs->count(); ++i)
+        if (auto *other = qobject_cast<DocumentTab *>(m_tabs->widget(i));
+            other && other != t && other->path() == QFileInfo(path).absoluteFilePath()) {
+            plainWarning(this, tr("Save As"), tr("“%1” is open in another tab. Close it first.").arg(other->title()));
+            return false;
+        }
+    return t->save(path);
 }
 
 void MainWindow::updateRecentMenu()
@@ -705,6 +907,7 @@ void MainWindow::closeTab(int index)
 {
     if (index < 0) return;
     QWidget *w = m_tabs->widget(index);
+    if (!maybeSave(qobject_cast<DocumentTab *>(w))) return;
     m_tabs->removeTab(index);
     w->deleteLater();
     updateUi();
@@ -722,6 +925,7 @@ void MainWindow::exportPdf()
     if (path.isEmpty()) return;
     if (!path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) path += QStringLiteral(".pdf");
 
+    if (PdfDocument *p = t->pdf()) p->formCommit();  // include the field being typed in
     DocumentPtr doc = t->document();
     const int rotation = t->view()->rotation();
     auto *progress = new QProgressDialog(tr("Exporting “%1”…").arg(t->title()), QString(), 0, 0, this);
@@ -732,7 +936,7 @@ void MainWindow::exportPdf()
         const QString error = watcher->result();
         progress->deleteLater();
         watcher->deleteLater();
-        if (!error.isEmpty()) QMessageBox::warning(this, tr("Export Failed"), error);
+        if (!error.isEmpty()) plainWarning(this, tr("Export Failed"), error);
         else statusBar()->showMessage(tr("Exported to %1").arg(QDir::toNativeSeparators(path)), 5000);
     });
     watcher->setFuture(QtConcurrent::run([doc, path, rotation]() -> QString {
@@ -747,6 +951,8 @@ void MainWindow::print()
 {
     DocumentTab *t = currentTab();
     if (!t || !t->isLoaded()) return;
+    if (PdfDocument *p = t->pdf(); p && !p->canPrint()) return;  // the owner does not allow it
+    if (PdfDocument *p = t->pdf()) p->formCommit();
     QPrinter printer(QPrinter::HighResolution);
     printer.setDocName(t->title());
     printer.setFromTo(1, t->document()->pageCount());
@@ -763,6 +969,7 @@ void MainWindow::copy()
 {
     DocumentTab *t = currentTab();
     if (!t || !t->isLoaded()) return;
+    if (PdfDocument *p = t->pdf(); p && !p->canCopy()) return;  // the owner does not allow it
     if (t->view()->hasSelection()) {
         QApplication::clipboard()->setText(t->view()->selectedText());
         return;
@@ -895,6 +1102,33 @@ void MainWindow::changeEvent(QEvent *e)
 
 void MainWindow::closeEvent(QCloseEvent *e)
 {
-    QSettings().setValue(QStringLiteral("geometry"), saveGeometry());
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (!maybeSave(qobject_cast<DocumentTab *>(m_tabs->widget(i)))) {
+            e->ignore();
+            return;
+        }
+    }
+    m_geometryTimer->stop();
+    saveWindowGeometry();
     QMainWindow::closeEvent(e);
+}
+
+void MainWindow::moveEvent(QMoveEvent *e)
+{
+    if (isVisible()) m_geometryTimer->start();
+    QMainWindow::moveEvent(e);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *e)
+{
+    if (isVisible()) m_geometryTimer->start();
+    QMainWindow::resizeEvent(e);
+}
+
+// The most recently moved, resized or closed window sets the size and place
+// of the next one. A minimised window keeps the last saved state.
+void MainWindow::saveWindowGeometry()
+{
+    if (isMinimized()) return;
+    QSettings().setValue(QStringLiteral("geometry"), saveGeometry());
 }

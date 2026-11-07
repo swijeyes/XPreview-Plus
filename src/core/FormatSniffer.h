@@ -15,11 +15,14 @@ enum class SniffedFormat {
     FlatOdfText,      // .fodt
     Svg,
     Image,
+    PostScript,
+    Eps,              // Encapsulated PostScript (text or DOS binary)
 };
 
 struct SniffResult {
     SniffedFormat format = SniffedFormat::Unknown;
     bool extensionMismatch = false;  // content disagrees with the extension
+    bool knownExtension = false;     // the extension is one of the supported formats
     QString description;
 };
 

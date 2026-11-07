@@ -21,7 +21,9 @@
 ## Features
 
 - **Opens:**
-  - **PDF** (via PDFium), including password-protected files
+  - **PDF** (via PDFium), including encrypted files (RC4 and AES-256) and
+    owner restrictions, which are honoured
+  - **PostScript and EPS**, converted to PDF by Ghostscript in a sandboxed helper process
   - **PNG, JPEG, GIF, WebP, TIFF** (multi-page), **BMP, HEIC** and **SVG**
   - **RTF**
   - **ODT / OTT / FODT** (OpenDocument text)
@@ -29,8 +31,20 @@
   Formats are detected from file content, not the extension.
 - **Sidebar:** page **thumbnails**, or a **table of contents** (PDF bookmarks, or
   the headings of an RTF/ODT document).
+- **Fill in PDF forms:** text fields, check boxes, radio buttons and lists, with
+  copy/paste and undo inside fields. Values are saved into the PDF.
+- **Edit PDF pages** right in the thumbnail sidebar:
+  - drag thumbnails to reorder pages (Option/Alt-drag copies them)
+  - drop PDFs — or images, RTF and ODT files — onto the thumbnails to combine
+    them; drag pages between windows to copy them
+  - rotate, delete, insert blank pages, and export selected pages as a new PDF
+  - undo/redo, and **Save** / **Save As** (⌘S / ⇧⌘S), with a prompt for unsaved
+    changes
+- **Password protection:** save PDFs with an open password and/or
+  print/copy/change restrictions (AES-256, via qpdf). Protected PDFs keep their
+  protection when edited and saved.
 - **Export as PDF** works for every format:
-  - PDFs are copied byte-for-byte, or re-saved losslessly if rotated.
+  - PDFs are copied byte-for-byte, or re-saved losslessly if rotated or edited.
   - Everything else becomes real vector pages with selectable, searchable text.
 - **Viewing:** fast tiled rendering; zoom, pinch-zoom, fit width and fit page;
   rotation. PDFs can be shown as scrolling pages, one page at a time, or two
@@ -39,7 +53,8 @@
   printing.
 - **Opening files:** tabs, recent files, drag-and-drop onto the window or the
   Dock icon, Open With in Finder. PDFs reopen on the page you were reading.
-- **Two looks:** a **Modern** flat theme in Light or Dark (the default), or a
+- **Two looks:** a **Modern** flat theme in Light or Dark (the default), with a
+  **Dracula** dark style as an alternative to neutral Graphite, or a
   **Classic** glossy look — classic scroll bars (both arrows together) and a
   gradient toolbar and status bar, in **Blue** or **Gray**.
 - **Preferences** (⌘, / Edit → Preferences…): appearance, what 100% means for
@@ -77,12 +92,17 @@ Each file has a `.sha256` checksum next to it.
 | Action | macOS | Windows / Linux |
 |---|---|---|
 | Open | ⌘O | Ctrl+O |
+| Save / Save As (PDF) | ⌘S / ⇧⌘S | Ctrl+S / Ctrl+Shift+S |
+| Undo / Redo | ⌘Z / ⇧⌘Z | Ctrl+Z / Ctrl+Y |
 | Export as PDF | ⇧⌘E | Ctrl+Shift+E |
 | Find / next / previous | ⌘F / ⌘G / ⇧⌘G | Ctrl+F / F3 / Shift+F3 |
 | Hide sidebar / Thumbnails / Table of contents | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 | Ctrl+Alt+1 / 2 / 3 |
 | Actual size / Zoom in / Zoom out / Fit page / Fit width | ⌘0 / ⌘+ / ⌘− / ⌘9 / ⌘8 | Ctrl+0 / + / − / 9 / 8 |
 | Previous / next page | ⌥⌘↑ / ⌥⌘↓ | Ctrl+Alt+Up / Down |
-| Rotate left / right | ⌘L / ⌘R | Ctrl+L / Ctrl+R |
+| Rotate view left / right | ⌘L / ⌘R | Ctrl+L / Ctrl+R |
+| Rotate page left / right (saved) | ⇧⌘L / ⇧⌘R | Ctrl+Shift+L / Ctrl+Shift+R |
+| Insert page from file / blank page | ⌥⌘I / ⇧⌘N | Ctrl+Alt+I / Ctrl+Shift+N |
+| Delete selected pages | Delete (in the sidebar) | Delete (in the sidebar) |
 | Inspector | ⌘I | Ctrl+I |
 | Preferences | ⌘, | Edit → Preferences… |
 
@@ -94,7 +114,7 @@ Widgets, Svg, PrintSupport, Concurrent; qtimageformats recommended).
 ### macOS
 
 ```sh
-brew install qtbase qtsvg qtimageformats miniz ninja cmake
+brew install qtbase qtsvg qtimageformats miniz ninja cmake qpdf ghostscript
 scripts/fetch-deps.sh            # PDFium binaries + bundled fonts
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=$(brew --prefix)
 cmake --build build
@@ -162,11 +182,22 @@ safely. All limits live in [`src/core/Limits.h`](src/core/Limits.h).
 - **No access outside the document:** SVG references to local files are
   stripped (including svgz and SVG embedded in ODT), and ODF images resolve
   only inside the package. Links open only on click, and only for http, https
-  and mailto. Macros and scripts never run.
-- **Export:** writes are atomic (`QSaveFile`), so a failed export never leaves
-  a partial file, and exporting over the open source file is safe.
+  and mailto. Macros and scripts never run, including JavaScript, URL and
+  named actions in PDF forms.
+- **PostScript is isolated:** Ghostscript runs as a separate process with
+  `-dSAFER`, a clean environment (no `GS_OPTIONS`), a private temporary folder
+  holding a copy of the input, CPU-time, file-size and wall-clock limits, and on
+  macOS a sandbox profile that denies network access, process creation, writes
+  outside that folder and reads inside the home folder.
+- **Encryption:** owner restrictions (print, copy, change) are enforced, saving
+  re-encrypts with the original settings, and passwords are wiped from memory
+  when a document closes.
+- **Export and Save:** writes are atomic (`QSaveFile`), so a failed export or
+  save never leaves a partial file, and saving over the open source file is
+  safe (the document continues from an in-memory copy).
 - **Build hardening:**
-  - Stack protector everywhere.
+  - Stack protector everywhere; zero-initialised stack variables and
+    bounds-checked standard containers.
   - Windows: ASLR, high-entropy VA and DEP.
   - Linux: PIE, full RELRO and FORTIFY.
   - macOS: hardened runtime.
@@ -181,7 +212,8 @@ vulnerability** on this repository.
 
 ```
 src/core    document interface, format sniffing, loader, exporter, fonts, limits, safe images
-src/pdf     PDFium backend
+src/pdf     PDFium backend: viewing, form filling, page editing; encryption via qpdf
+src/ps      PostScript/EPS conversion through sandboxed Ghostscript
 src/image   raster and SVG backends
 src/flow    shared FlowModel, QTextDocument builder, paginated document
 src/rtf     RTF tokenizer + interpreter
@@ -203,7 +235,7 @@ These are planned and not built yet:
   in RTF (currently placeholders).
 - **Text layout:** footnotes placed on their own page, and text selection that
   continues across pages.
-- **PDF editing:** annotations and form filling.
+- **PDF annotations:** highlights, notes and signatures.
 - **Packaging:** App Sandbox, a sandboxed parser process, and a Linux AppImage
   or Flatpak.
 

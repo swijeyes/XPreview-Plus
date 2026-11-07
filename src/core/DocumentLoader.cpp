@@ -7,6 +7,7 @@
 #include "image/ImageDocument.h"
 #include "odf/OdtImporter.h"
 #include "pdf/PdfDocument.h"
+#include "ps/PostScriptConverter.h"
 #include "rtf/RtfImporter.h"
 #include "core/Limits.h"
 #include "core/SafeImage.h"
@@ -55,6 +56,16 @@ LoadResult load(const QString &path, const QByteArray &password)
         } else if (!r.document) {
             r.error = QStringLiteral("The PDF could not be opened (it may be damaged).");
         }
+        break;
+    }
+    case SniffedFormat::PostScript:
+    case SniffedFormat::Eps: {
+        const bool eps = r.sniff.format == SniffedFormat::Eps;
+        const QByteArray pdf = PostScript::convertToPdf(path, eps, &error);
+        if (pdf.isEmpty()) break;
+        PdfDocument::LoadError e;
+        r.document = PdfDocument::openConverted(pdf, path, eps ? QStringLiteral("EPS image") : QStringLiteral("PostScript document"), &e);
+        if (!r.document) error = QStringLiteral("The converted document could not be opened.");
         break;
     }
     case SniffedFormat::Image:
@@ -128,9 +139,10 @@ LoadResult loadDocument(const QString &path, const QByteArray &password)
 QString supportedFileFilter()
 {
     return QStringLiteral(
-        "All supported files (*.pdf *.png *.jpg *.jpeg *.gif *.webp *.tif *.tiff *.bmp *.heic *.svg "
+        "All supported files (*.pdf *.ps *.eps *.epsf *.epsi *.png *.jpg *.jpeg *.gif *.webp *.tif *.tiff *.bmp *.heic *.svg "
         "*.svgz *.rtf *.odt *.ott *.fodt);;"
         "PDF documents (*.pdf);;"
+        "PostScript and EPS (*.ps *.eps *.epsf *.epsi);;"
         "Images (*.png *.jpg *.jpeg *.gif *.webp *.tif *.tiff *.bmp *.heic *.svg *.svgz);;"
         "Text documents (*.rtf *.odt *.ott *.fodt);;"
         "All files (*)");

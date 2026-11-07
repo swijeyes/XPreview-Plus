@@ -53,6 +53,8 @@ public:
     virtual ~Document() = default;
 
     virtual DocumentKind kind() const = 0;
+    // What to call the document in the UI ("PDF document", "EPS image", ...).
+    virtual QString kindName() const { return documentKindName(kind()); }
     virtual int pageCount() const = 0;
     virtual QSizeF pageSize(int page) const = 0;  // points
 

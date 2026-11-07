@@ -11,6 +11,14 @@ namespace Limits {
 // Input files
 constexpr std::int64_t kMaxTextFileBytes = 512ll * 1024 * 1024;  // RTF / FODT / SVG
 
+// PostScript / EPS (converted by Ghostscript in a separate process)
+constexpr std::int64_t kMaxPostScriptBytes = 256ll * 1024 * 1024;
+constexpr std::int64_t kMaxPostScriptPdfBytes = 512ll * 1024 * 1024;
+constexpr int kPostScriptTimeoutMs = 60000;
+
+// PDFs read whole into memory (inserted pages, drops from other apps)
+constexpr std::int64_t kMaxInsertPdfBytes = 1024ll * 1024 * 1024;
+
 // ZIP / ODF package
 constexpr int kMaxZipEntries = 20000;
 constexpr std::uint64_t kMaxEntryBytes = 256ull * 1024 * 1024;

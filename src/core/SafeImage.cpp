@@ -45,13 +45,28 @@ QByteArray gunzip(const QByteArray &in)
     if (flags & 16) while (pos < n && d[pos++]) {}  // FCOMMENT
     if (flags & 2) pos += 2;                        // FHCRC
     if (pos >= n - 8) return {};
-    size_t outLen = 0;
-    void *out = tinfl_decompress_mem_to_heap(d + pos, size_t(n - 8 - pos), &outLen, 0);
-    if (!out) return {};
+    mz_stream s{};
+    if (mz_inflateInit2(&s, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) return {};
+    s.next_in = d + pos;
+    s.avail_in = mz_uint32(n - 8 - pos);
+    // Inflated in chunks and abandoned at the size limit, so a small
+    // compression bomb cannot make it allocate gigabytes first.
     QByteArray result;
-    if (outLen <= size_t(Limits::kMaxSvgBytes)) result = QByteArray(static_cast<const char *>(out), qsizetype(outLen));
-    mz_free(out);
-    return result;
+    unsigned char chunk[64 * 1024];
+    int status = MZ_OK;
+    while (status == MZ_OK) {
+        s.next_out = chunk;
+        s.avail_out = sizeof chunk;
+        status = mz_inflate(&s, MZ_NO_FLUSH);
+        const qsizetype got = qsizetype(sizeof chunk - s.avail_out);
+        if (result.size() + got > Limits::kMaxSvgBytes) {
+            status = MZ_DATA_ERROR;
+            break;
+        }
+        result.append(reinterpret_cast<const char *>(chunk), got);
+    }
+    mz_inflateEnd(&s);
+    return status == MZ_STREAM_END ? result : QByteArray();
 }
 
 }  // namespace
