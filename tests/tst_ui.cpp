@@ -3,6 +3,7 @@
 
 #include "flow/FlowDocument.h"
 #include "pdf/PdfDocument.h"
+#include "pdf/PdfSecurity.h"
 #include "ps/PostScriptConverter.h"
 #include "ui/DocumentTab.h"
 #include "ui/AppStyle.h"
@@ -23,6 +24,7 @@
 #include <QSettings>
 #include <QStyleFactory>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 using namespace flow;
@@ -331,6 +333,119 @@ private slots:
         QCOMPARE(thumbs->model()->rowCount(), 4);
         QVERIFY(tab.save());
         QVERIFY(!tab.isModified());
+    }
+
+    void pdfAnnotatingInTab()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("notes.pdf"));
+        {
+            QPdfWriter w(path);
+            w.setResolution(72);
+            w.setPageSize(QPageSize(QSizeF(400, 400), QPageSize::Point, QString(), QPageSize::ExactMatch));
+            w.setPageMargins({});
+            QPainter p(&w);
+            p.setFont(QFont(QStringLiteral("Arimo"), 20));
+            p.drawText(QPointF(40, 60), QStringLiteral("Mark these words"));
+        }
+        DocumentTab tab(path);
+        QTRY_VERIFY_WITH_TIMEOUT(tab.isLoaded(), 10000);
+        tab.resize(900, 700);
+        tab.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&tab));
+        settle();
+        DocumentView *view = tab.view();
+        QVERIFY(view->canAnnotate());
+        auto at = [&](double x, double y) { return view->mapFromPage(0, QPointF(x, y)).toPoint(); };
+        auto drag = [&](QPoint from, QPoint to) {
+            QTest::mousePress(view->viewport(), Qt::LeftButton, {}, from);
+            for (int i = 1; i <= 5; ++i) {
+                QMouseEvent move(QEvent::MouseMove, from + (to - from) * i / 5, view->viewport()->mapToGlobal(from + (to - from) * i / 5),
+                                 Qt::NoButton, Qt::LeftButton, {});
+                QApplication::sendEvent(view->viewport(), &move);
+            }
+            QTest::mouseRelease(view->viewport(), Qt::LeftButton, {}, to);
+        };
+
+        // Highlight tool: dragging over text highlights it.
+        view->setTool(DocumentView::Tool::Highlight);
+        drag(at(42, 52), at(200, 54));
+        QCOMPARE(tab.pdf()->annotations(0).size(), 1);
+        QVERIFY(!view->hasSelection());
+        QVERIFY(tab.isModified());
+
+        // Rectangle tool: drag out a box.
+        view->setTool(DocumentView::Tool::Rectangle);
+        drag(at(100, 200), at(250, 300));
+        QVector<PdfDocument::Annotation> all = tab.pdf()->annotations(0);
+        QCOMPARE(all.size(), 2);
+        QVERIFY(qAbs(all[1].rect.left() - 100) < 3 && qAbs(all[1].rect.bottom() - 300) < 3);
+
+        // Escape goes back to selecting; clicking the box selects it and
+        // Delete removes it; Undo brings it back.
+        QSignalSpy toolChanged(view, &DocumentView::toolChanged);
+        QTest::keyClick(view, Qt::Key_Escape);
+        QCOMPARE(view->tool(), DocumentView::Tool::Select);
+        QCOMPARE(toolChanged.size(), 1);
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, {}, at(175, 250));
+        QVERIFY(view->hasSelectedAnnotation());
+        QTest::keyClick(view, Qt::Key_Delete);
+        QVERIFY(!view->hasSelectedAnnotation());
+        QCOMPARE(tab.pdf()->annotations(0).size(), 1);
+        tab.undo();
+        QCOMPARE(tab.pdf()->annotations(0).size(), 2);
+        QVERIFY(tab.save());
+        QVERIFY(!tab.isModified());
+    }
+
+    // Save As with "Protect with password": on asks for a password and saves
+    // encrypted, cancelling saves nothing, off saves without protection.
+    void saveAsWithPassword()
+    {
+        if (!PdfSecurity::available()) QSKIP("built without qpdf");
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("plain.pdf"));
+        QVERIFY(QFile::copy(QStringLiteral(XPREVIEW_TEST_CORPUS "/form.pdf"), path));
+        DocumentTab tab(path);
+        QTRY_VERIFY_WITH_TIMEOUT(tab.isLoaded(), 10000);
+        QVERIFY(!tab.willSaveProtected() && tab.canChangeProtection());
+
+        // Cancelling the password dialog saves nothing.
+        const QString cancelled = dir.filePath(QStringLiteral("cancelled.pdf"));
+        QTimer::singleShot(0, [] {
+            if (auto *d = qobject_cast<ProtectionDialog *>(QApplication::activeModalWidget())) d->reject();
+        });
+        QVERIFY(!tab.saveAs(cancelled, true));
+        QVERIFY(!QFile::exists(cancelled));
+        QCOMPARE(tab.path(), QFileInfo(path).absoluteFilePath());
+
+        const QString locked = dir.filePath(QStringLiteral("locked.pdf"));
+        QTimer::singleShot(0, [] {
+            auto *d = qobject_cast<ProtectionDialog *>(QApplication::activeModalWidget());
+            if (!d) return;
+            const auto edits = d->findChildren<QLineEdit *>();
+            edits[0]->setText(QStringLiteral("pw"));
+            edits[1]->setText(QStringLiteral("pw"));
+            d->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        });
+        QVERIFY(tab.saveAs(locked, true));
+        QCOMPARE(tab.path(), QFileInfo(locked).absoluteFilePath());
+        QVERIFY(tab.willSaveProtected() && !tab.isModified());
+        PdfDocument::LoadError e;
+        QVERIFY(!PdfDocument::open(locked, {}, &e));
+        QCOMPARE(e, PdfDocument::LoadError::Password);
+        QVERIFY(PdfDocument::open(locked, "pw", &e));
+
+        // Left on: the protection stays, without asking again.
+        const QString again = dir.filePath(QStringLiteral("again.pdf"));
+        QVERIFY(tab.saveAs(again, true));
+        QVERIFY(!PdfDocument::open(again, {}, &e) && PdfDocument::open(again, "pw", &e));
+
+        // Turned off: saved as a normal PDF.
+        const QString open = dir.filePath(QStringLiteral("open.pdf"));
+        QVERIFY(tab.saveAs(open, false));
+        auto plain = PdfDocument::open(open, {}, &e);
+        QVERIFY(plain && !plain->isEncrypted());
     }
 
     void protectionDialogValidates()

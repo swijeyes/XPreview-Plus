@@ -16,6 +16,7 @@
 #include "rtf/RtfTokenizer.h"
 
 #include <QPdfWriter>
+#include <fpdf_annot.h>
 #include <QTemporaryDir>
 
 #include <limits>
@@ -694,6 +695,189 @@ private slots:
         QVERIFY(Exporter::exportPdf(*owner2, exported, 0, &err));
         QVERIFY(!PdfDocument::open(exported, {}, &e));
         QCOMPARE(e, PdfDocument::LoadError::Password);
+    }
+
+    // PDFium refuses encrypted files whose encryption dictionary is damaged
+    // (here: a wrong /Perms check value) even with the right password;
+    // they open through qpdf's decrypted copy.
+    void pdfDamagedEncryption()
+    {
+        if (!PdfSecurity::available()) QSKIP("built without qpdf");
+        QTemporaryDir dir;
+        QFile src(numberedPdf(dir.filePath(QStringLiteral("plain.pdf")), 3));
+        QVERIFY(src.open(QIODevice::ReadOnly));
+        PdfSecurity::Permissions allowed;
+        allowed.print = false;
+        QString err;
+        QByteArray enc = PdfSecurity::encrypt(src.readAll(), "user", "owner", allowed, &err);
+        QVERIFY2(!enc.isEmpty(), qPrintable(err));
+        const qsizetype perms = enc.indexOf("/Perms <");
+        QVERIFY(perms > 0);
+        char &digit = enc[perms + 8];
+        digit = digit == '0' ? '1' : '0';  // same length: the xref stays valid
+        const QString path = dir.filePath(QStringLiteral("damaged.pdf"));
+        QFile out(path);
+        QVERIFY(out.open(QIODevice::WriteOnly) && out.write(enc) == enc.size());
+        out.close();
+
+        PdfDocument::LoadError e;
+        QVERIFY(!PdfDocument::open(path, {}, &e));
+        QCOMPARE(e, PdfDocument::LoadError::Password);
+        QVERIFY(!PdfDocument::open(path, "wrong", &e));
+        QCOMPARE(e, PdfDocument::LoadError::Password);
+        auto doc = PdfDocument::open(path, "user", &e);
+        QVERIFY(doc);
+        QVERIFY(doc->isDecryptedCopy() && doc->isEncrypted());
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 1", "Page 2", "Page 3"}));
+        QVERIFY(!doc->canPrint() && doc->canCopy());
+        QVERIFY(!doc->unlock("user"));
+        QVERIFY(!doc->unlock("wrong"));
+        QVERIFY(doc->unlock("owner"));
+        QVERIFY(doc->canPrint() && !doc->isRestricted());
+        // Saved with the original's protection (copied as it is, so qpdf
+        // decrypts it again).
+        QVERIFY(doc->deletePages({1}, &err));
+        const QString saved = dir.filePath(QStringLiteral("saved.pdf"));
+        QVERIFY2(doc->save(saved, &err), qPrintable(err));
+        QVERIFY(!PdfDocument::open(saved, {}, &e));
+        auto again = PdfDocument::open(saved, "user", &e);
+        QVERIFY(again && again->isEncrypted() && !again->canPrint());
+        QCOMPARE(pageLabels(*again), QStringList({"Page 1", "Page 3"}));
+
+        // The loader reports encryption nobody can read as such.
+        QByteArray pubsec = enc;
+        const qsizetype filter = pubsec.indexOf("/Filter /Standard");
+        QVERIFY(filter > 0);
+        pubsec.replace(filter, 17, "/Filter /PubSecXX");
+        const QString cert = dir.filePath(QStringLiteral("cert.pdf"));
+        QFile c(cert);
+        QVERIFY(c.open(QIODevice::WriteOnly) && c.write(pubsec) == pubsec.size());
+        c.close();
+        const LoadResult r = loadDocument(cert, "user");
+        QVERIFY(!r.document && !r.needsPassword);
+        QVERIFY2(r.error.contains(QStringLiteral("encryption")), qPrintable(r.error));
+    }
+
+    // A PDF with restrictions but no open password opens restricted; its
+    // owner password lifts them, keeping edits made so far.
+    void pdfUnlockOwnerPassword()
+    {
+        if (!PdfSecurity::available()) QSKIP("built without qpdf");
+        QTemporaryDir dir;
+        auto doc = openPdf(numberedPdf(dir.filePath(QStringLiteral("plain.pdf")), 2));
+        PdfDocument::Protection p;
+        p.mode = PdfDocument::Protection::Mode::Custom;
+        p.ownerPassword = "owner";
+        p.allowChanges = false;
+        p.allowCopy = false;
+        QString err;
+        QVERIFY(doc->setProtection(p, &err));
+        const QString path = dir.filePath(QStringLiteral("restricted.pdf"));
+        QVERIFY2(doc->save(path, &err), qPrintable(err));
+
+        auto restricted = openPdf(path);
+        QVERIFY(restricted && restricted->isRestricted());
+        QVERIFY(!restricted->canAnnotate() && !restricted->canEditPages());
+        QVERIFY(!restricted->addNote(0, QPointF(50, 50), QStringLiteral("no"), Qt::yellow));
+        QVERIFY(!restricted->unlock("wrong"));
+        QVERIFY(restricted->isRestricted());
+        QVERIFY(restricted->unlock("owner"));
+        QVERIFY(!restricted->isRestricted() && restricted->canAnnotate());
+        QVERIFY(restricted->deletePages({1}, &err));
+        QVERIFY(restricted->addNote(0, QPointF(50, 50), QStringLiteral("yes"), Qt::yellow));
+        const QString saved = dir.filePath(QStringLiteral("saved.pdf"));
+        QVERIFY2(restricted->save(saved, &err), qPrintable(err));
+        auto again = openPdf(saved);  // still restricted, like the original
+        QVERIFY(again && again->isRestricted());
+        QCOMPARE(again->pageCount(), 1);
+        QCOMPARE(again->annotations(0).size(), 1);
+    }
+
+    void pdfAnnotations()
+    {
+        QTemporaryDir dir;
+        auto doc = openPdf(numberedPdf(dir.filePath(QStringLiteral("plain.pdf")), 2));
+        QVERIFY(doc && doc->canAnnotate());
+        QVERIFY(doc->annotations(0).isEmpty());
+        const QVector<TextHit> hits = doc->search(QStringLiteral("Page 1"), false);
+        QCOMPARE(hits.size(), 1);
+        QVERIFY(doc->addMarkup(PdfDocument::Markup::Highlight, hits.first().boxes, QColor(255, 220, 0)));
+        QVERIFY(doc->isModified());
+        QCOMPARE(doc->undoLabel(), QStringLiteral("Highlight"));
+        QVERIFY(doc->addMarkup(PdfDocument::Markup::Underline, hits.first().boxes, Qt::blue));
+        QVERIFY(doc->addMarkup(PdfDocument::Markup::StrikeOut, hits.first().boxes, Qt::red));
+        QVERIFY(doc->addNote(0, QPointF(400, 100), QStringLiteral("A note ✓"), Qt::yellow));
+        QVERIFY(doc->addInk(0, {QPolygonF({QPointF(100, 300), QPointF(150, 350), QPointF(200, 300)})}, Qt::red, 2));
+        QVERIFY(doc->addShape(PdfDocument::Shape::Rectangle, 0, QRectF(100, 400, 100, 50), Qt::blue, 2));
+        QVERIFY(doc->addShape(PdfDocument::Shape::Oval, 0, QRectF(250, 400, 100, 50), Qt::darkGreen, 2));
+        QVERIFY(!doc->addShape(PdfDocument::Shape::Oval, 0, QRectF(250, 400, 0, 0), Qt::darkGreen, 2));
+        QVERIFY(doc->addTextBox(0, QRectF(100, 500, 150, 0),
+                                QStringLiteral("A text box with enough words to wrap onto more lines"), Qt::black, 12));
+        QVERIFY(doc->addTextBox(1, QRectF(100, 100, 200, 0), QStringLiteral("Ελληνικά and café"), Qt::darkBlue, 14));
+        QVERIFY(!doc->addTextBox(1, QRectF(100, 100, 200, 0), QStringLiteral("   "), Qt::black, 12));
+        // Annotations do not change the page structure, or the text.
+        QCOMPARE(doc->structureRevision(), 0);
+        QCOMPARE(pageLabels(*doc), QStringList({"Page 1", "Page 2"}));
+        // Very long unbroken text wraps in linear time.
+        QElapsedTimer timer;
+        timer.start();
+        QVERIFY(doc->addTextBox(1, QRectF(100, 300, 300, 0), QString(20000, QLatin1Char('x')), Qt::black, 4));
+        QVERIFY2(timer.elapsed() < 5000, qPrintable(QString::number(timer.elapsed())));
+        QVERIFY(doc->undo());
+
+        QVector<PdfDocument::Annotation> all = doc->annotations(0);
+        QVector<int> types;
+        for (const auto &a : all) types << a.subtype;
+        QCOMPARE(types, QVector<int>({FPDF_ANNOT_HIGHLIGHT, FPDF_ANNOT_UNDERLINE, FPDF_ANNOT_STRIKEOUT, FPDF_ANNOT_TEXT,
+                                      FPDF_ANNOT_INK, FPDF_ANNOT_SQUARE, FPDF_ANNOT_CIRCLE, FPDF_ANNOT_STAMP}));
+        // Positions come back in page points, as given.
+        QVERIFY(qAbs(all[5].rect.left() - 100) < 2 && qAbs(all[5].rect.top() - 400) < 2);
+        const PdfDocument::Annotation box = all[7];
+        QVERIFY(box.isTextBox && box.rect.height() > 3 * 12);  // grew to fit three or more lines
+        QVERIFY(qAbs(box.rect.left() - 100) < 1 && qAbs(box.rect.top() - 500) < 1);
+        // The text box is drawn: dark pixels inside its rectangle.
+        const QImage img = doc->renderPage(0, 1.0, QRect(0, 0, 612, 792));
+        int dark = 0;
+        for (int y = int(box.rect.top()); y < int(box.rect.bottom()); ++y)
+            for (int x = int(box.rect.left()); x < int(box.rect.right()); ++x) dark += qGray(img.pixel(x, y)) < 128;
+        QVERIFY2(dark > 50, qPrintable(QString::number(dark)));
+
+        const PdfDocument::Annotation note = doc->annotationAt(0, QPointF(410, 110));
+        QVERIFY(note.isNote);
+        QCOMPARE(note.contents, QStringLiteral("A note ✓"));
+        QVERIFY(!doc->annotationAt(0, QPointF(30, 750)).isValid());
+        QVERIFY(doc->setAnnotationText(note, QStringLiteral("Changed")));
+        QCOMPARE(doc->annotationAt(0, QPointF(410, 110)).contents, QStringLiteral("Changed"));
+        QVERIFY(doc->setAnnotationText(box, QStringLiteral("Short")));
+        all = doc->annotations(0);
+        QCOMPARE(all.size(), 8);
+        QCOMPARE(all.last().contents, QStringLiteral("Short"));
+        QVERIFY(all.last().isTextBox && all.last().rect.height() < box.rect.height());
+
+        QVERIFY(doc->removeAnnotation(doc->annotationAt(0, QPointF(150, 425))));  // the rectangle
+        QCOMPARE(doc->annotations(0).size(), 7);
+        QVERIFY(doc->undo());
+        QCOMPARE(doc->annotations(0).size(), 8);
+
+        // Saved, and readable by another PDF reader (qpdf), with appearances.
+        QString err;
+        const QString saved = dir.filePath(QStringLiteral("annotated.pdf"));
+        QVERIFY2(doc->save(saved, &err), qPrintable(err));
+        auto again = openPdf(saved);
+        QCOMPARE(again->annotations(0).size(), 8);
+        QCOMPARE(again->annotations(1).size(), 1);
+        QCOMPARE(again->annotations(1).first().contents, QStringLiteral("Ελληνικά and café"));
+        QFile f(saved);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray bytes = f.readAll();
+        QVERIFY(bytes.contains("/Highlight") && bytes.contains("/AP"));
+        // Form widgets are not annotations to edit.
+        const QString form = dir.filePath(QStringLiteral("form.pdf"));
+        QFile ff(form);
+        QVERIFY(ff.open(QIODevice::WriteOnly));
+        ff.write(formPdf());
+        ff.close();
+        QVERIFY(openPdf(form)->annotations(0).isEmpty());
     }
 
     void postScriptAndEps()

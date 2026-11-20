@@ -53,6 +53,9 @@ LoadResult load(const QString &path, const QByteArray &password)
         if (e == PdfDocument::LoadError::Password) {
             r.needsPassword = true;
             r.error = QStringLiteral("This PDF is password protected.");
+        } else if (e == PdfDocument::LoadError::Security) {
+            r.error = QStringLiteral("This PDF uses a kind of encryption XPreview+ cannot open, such as "
+                                     "certificate or DRM protection. Open it in the app it was made for.");
         } else if (!r.document) {
             r.error = QStringLiteral("The PDF could not be opened (it may be damaged).");
         }

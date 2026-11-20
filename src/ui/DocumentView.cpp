@@ -10,8 +10,12 @@
 #include "pdf/PdfDocument.h"
 
 #include <QClipboard>
+#include <QContextMenuEvent>
 #include <QDesktopServices>
 #include <QGuiApplication>
+#include <QInputDialog>
+#include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QNativeGestureEvent>
 #include <QPainter>
@@ -20,6 +24,7 @@
 #include <QScrollBar>
 #include <QStyle>
 #include <QTimer>
+#include <QToolTip>
 #include <QUrl>
 #include <QWindow>
 #include <QtMath>
@@ -242,6 +247,37 @@ void DocumentView::paintEvent(QPaintEvent *event)
         }
         for (const PageRect &b : m_selection.boxes)
             if (b.page == i) p.fillRect(b.rect, QColor(0, 110, 255, 70));
+
+        // Annotation being drawn, and the selected annotation.
+        p.setRenderHint(QPainter::Antialiasing);
+        if (m_toolDrag && i == m_pressPage) {
+            QPen pen(m_penColor, 2);
+            pen.setCapStyle(Qt::RoundCap);
+            pen.setJoinStyle(Qt::RoundJoin);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            const QRectF r = QRectF(m_pressPagePt, m_toolEnd).normalized();
+            switch (m_tool) {
+            case Tool::Draw: p.drawPolyline(m_stroke); break;
+            case Tool::Rectangle: p.drawRect(r); break;
+            case Tool::Oval: p.drawEllipse(r); break;
+            case Tool::TextBox: {
+                QPen dashed(Appearance::instance()->accent(), 1, Qt::DashLine);
+                dashed.setCosmetic(true);
+                p.setPen(dashed);
+                p.drawRect(r);
+                break;
+            }
+            default: break;
+            }
+        }
+        if (m_annotation.page == i) {
+            QPen pen(Appearance::instance()->accent(), 1.5, Qt::DashLine);
+            pen.setCosmetic(true);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(m_annotation.rect.adjusted(-2, -2, 2, 2));
+        }
         p.restore();
     }
 }
@@ -383,6 +419,9 @@ void DocumentView::refresh()
 
 void DocumentView::documentChanged()
 {
+    m_annotCache.clear();
+    m_annotation = {};
+    m_toolDrag = false;
     m_hits.clear();
     m_currentHit = -1;
     m_selection = {};
@@ -536,6 +575,11 @@ void DocumentView::updateCursor(QPointF pos)
     const QPointF pt = toPage(page, pos);
     const QSizeF size = m_doc->pageSize(page);
     const bool onPage = QRectF(QPointF(0, 0), size).contains(pt);
+    if (onPage && m_tool != Tool::Select && canAnnotate()) {
+        const bool markup = m_tool == Tool::Highlight || m_tool == Tool::Underline || m_tool == Tool::StrikeOut;
+        viewport()->setCursor(markup ? Qt::IBeamCursor : Qt::CrossCursor);
+        return;
+    }
     const int field = onPage && m_pdf ? m_pdf->formFieldAt(page, pt) : -1;
     if (field == PdfDocument::kTextField)
         viewport()->setCursor(Qt::IBeamCursor);
@@ -558,9 +602,25 @@ void DocumentView::mousePressEvent(QMouseEvent *e)
     m_pressPage = pageAt(e->position());
     m_pressPagePt = toPage(m_pressPage, e->position());
     m_dragging = false;
-    if (m_pdf && m_pdf->hasForm() && !(e->modifiers() & Qt::AltModifier)) {
+    const bool onPage = QRectF(QPointF(0, 0), m_doc->pageSize(m_pressPage)).contains(m_pressPagePt);
+    const bool annotating = m_tool != Tool::Select && canAnnotate() && !(e->modifiers() & Qt::AltModifier);
+    if (annotating && onPage && m_tool >= Tool::Note) {
+        // Notes, drawings, shapes and text boxes start here.
+        if (m_pdf->formHasFocus()) m_pdf->formCommit();
+        clearSelection();
+        selectAnnotation({});
+        m_toolDrag = true;
+        m_stroke = {m_pressPagePt};
+        m_toolEnd = m_pressPagePt;
+        return;
+    }
+    if (m_pdf && m_tool == Tool::Select && !(e->modifiers() & Qt::AltModifier)) {
+        // Clicking an annotation selects it; dragging from it still selects text.
+        const bool onField = onPage && m_pdf->hasForm() && m_pdf->formFieldAt(m_pressPage, m_pressPagePt) >= 0;
+        selectAnnotation(onPage && !onField ? annotationAt(m_pressPage, m_pressPagePt) : PdfDocument::Annotation());
+    }
+    if (m_pdf && m_pdf->hasForm() && !annotating && !(e->modifiers() & Qt::AltModifier)) {
         // Clicks on form fields go to the field (focus, toggle, open a list).
-        const bool onPage = QRectF(QPointF(0, 0), m_doc->pageSize(m_pressPage)).contains(m_pressPagePt);
         if (onPage && m_pdf->formFieldAt(m_pressPage, m_pressPagePt) >= 0) {
             clearSelection();
             m_formPress = true;
@@ -579,6 +639,17 @@ void DocumentView::mousePressEvent(QMouseEvent *e)
 
 void DocumentView::mouseMoveEvent(QMouseEvent *e)
 {
+    if (m_toolDrag) {
+        const QSizeF size = m_doc->pageSize(m_pressPage);
+        QPointF pt = toPage(m_pressPage, e->position());
+        pt = QPointF(qBound(0.0, pt.x(), size.width()), qBound(0.0, pt.y(), size.height()));
+        // Points closer than a screen pixel add nothing to a drawing.
+        if (m_tool == Tool::Draw && QLineF(m_stroke.last(), pt).length() * scale() >= 1 && m_stroke.size() < 10000)
+            m_stroke << pt;
+        m_toolEnd = pt;
+        viewport()->update();
+        return;
+    }
     if (m_formPress) {
         // Dragging inside a field selects its text.
         m_pdf->formMouse(m_pressPage, toPage(m_pressPage, e->position()), PdfDocument::Mouse::Move, e->modifiers());
@@ -588,6 +659,18 @@ void DocumentView::mouseMoveEvent(QMouseEvent *e)
         if (m_pdf && m_pdf->hasForm()) {  // hover feedback on fields
             const int page = pageAt(e->position());
             m_pdf->formMouse(page, toPage(page, e->position()), PdfDocument::Mouse::Move, e->modifiers());
+        }
+        if (m_pdf) {
+            // Comments show as tooltips (plain text: they come from the file).
+            const int page = pageAt(e->position());
+            const PdfDocument::Annotation a = annotationAt(page, toPage(page, e->position()));
+            if (!a.contents.trimmed().isEmpty())
+                QToolTip::showText(e->globalPosition().toPoint(),
+                                   QStringLiteral("<p style='white-space:pre-wrap'>%1</p>")
+                                       .arg(a.contents.left(2000).toHtmlEscaped()),
+                                   viewport());
+            else
+                QToolTip::hideText();
         }
         updateCursor(e->position());
         return;
@@ -609,6 +692,11 @@ void DocumentView::mouseMoveEvent(QMouseEvent *e)
 void DocumentView::mouseReleaseEvent(QMouseEvent *e)
 {
     if (e->button() != Qt::LeftButton) return QAbstractScrollArea::mouseReleaseEvent(e);
+    if (m_toolDrag) {
+        m_toolDrag = false;
+        finishToolGesture();
+        return;
+    }
     if (m_formPress) {
         m_formPress = false;
         m_pdf->formMouse(m_pressPage, toPage(m_pressPage, e->position()), PdfDocument::Mouse::Release, e->modifiers());
@@ -619,6 +707,12 @@ void DocumentView::mouseReleaseEvent(QMouseEvent *e)
     updateCursor(e->position());
     if (m_dragging) {
         m_dragging = false;
+        // The markup tools mark the text as it is selected.
+        if (canAnnotate()) {
+            if (m_tool == Tool::Highlight) markSelection(PdfDocument::Markup::Highlight);
+            else if (m_tool == Tool::Underline) markSelection(PdfDocument::Markup::Underline);
+            else if (m_tool == Tool::StrikeOut) markSelection(PdfDocument::Markup::StrikeOut);
+        }
         return;
     }
     if ((e->position() - m_pressPos).manhattanLength() >= 4 && wasPanning) return;
@@ -631,6 +725,16 @@ void DocumentView::mouseReleaseEvent(QMouseEvent *e)
 
 void DocumentView::mouseDoubleClickEvent(QMouseEvent *e)
 {
+    if (m_pdf && m_tool == Tool::Select && e->button() == Qt::LeftButton) {
+        // Double-clicking a note or text box edits its text.
+        const int page = pageAt(e->position());
+        const PdfDocument::Annotation a = annotationAt(page, toPage(page, e->position()));
+        if ((a.isNote || a.isTextBox) && !(m_pdf->hasForm() && m_pdf->formFieldAt(page, toPage(page, e->position())) >= 0)) {
+            selectAnnotation(a);
+            editSelectedAnnotation();
+            return;
+        }
+    }
     if (m_pdf && m_pdf->hasForm() && e->button() == Qt::LeftButton) {
         const int page = pageAt(e->position());
         const QPointF pt = toPage(page, e->position());
@@ -792,8 +896,187 @@ void DocumentView::keyPressEvent(QKeyEvent *e)
     case Qt::Key_Right:
         if (horizontalScrollBar()->maximum() == 0) { stepPage(1); return; }
         break;
-    case Qt::Key_Escape: clearSelection(); return;
+    case Qt::Key_Escape:
+        if (m_toolDrag) {
+            m_toolDrag = false;
+            viewport()->update();
+        } else if (m_tool != Tool::Select) {
+            setTool(Tool::Select);
+            emit toolChanged(m_tool);
+        } else if (hasSelectedAnnotation()) {
+            selectAnnotation({});
+        } else {
+            clearSelection();
+        }
+        return;
+    case Qt::Key_Delete:
+    case Qt::Key_Backspace:
+        if (hasSelectedAnnotation()) {
+            deleteSelectedAnnotation();
+            return;
+        }
+        break;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        if (hasSelectedAnnotation() && selectedAnnotationHasText()) {
+            editSelectedAnnotation();
+            return;
+        }
+        break;
     default: break;
     }
     QAbstractScrollArea::keyPressEvent(e);
+}
+
+// --- Annotations ---------------------------------------------------------------
+
+void DocumentView::setTool(Tool tool)
+{
+    if (tool == m_tool) return;
+    m_tool = tool;
+    m_toolDrag = false;
+    if (tool != Tool::Select) selectAnnotation({});
+    viewport()->update();
+    updateCursor(viewport()->mapFromGlobal(QCursor::pos()));
+}
+
+void DocumentView::setAnnotationStyle(const QColor &markup, const QColor &pen, double textSize)
+{
+    m_markupColor = markup;
+    m_penColor = pen;
+    m_textSize = textSize;
+}
+
+const QVector<PdfDocument::Annotation> &DocumentView::pageAnnotations(int page)
+{
+    static const QVector<PdfDocument::Annotation> none;
+    if (!m_pdf || page < 0 || page >= m_doc->pageCount()) return none;
+    const qint64 revision = (qint64(m_pdf->structureRevision()) << 32) | m_pdf->annotationRevision();
+    if (revision != m_annotCacheRevision) {
+        m_annotCache.clear();
+        m_annotCacheRevision = revision;
+    }
+    auto it = m_annotCache.find(page);
+    if (it == m_annotCache.end()) it = m_annotCache.insert(page, m_pdf->annotations(page));
+    return *it;
+}
+
+PdfDocument::Annotation DocumentView::annotationAt(int page, QPointF pt)
+{
+    const QVector<PdfDocument::Annotation> &all = pageAnnotations(page);
+    for (auto it = all.crbegin(); it != all.crend(); ++it)
+        if (it->rect.adjusted(-2, -2, 2, 2).contains(pt)) return *it;
+    return {};
+}
+
+void DocumentView::selectAnnotation(const PdfDocument::Annotation &annotation)
+{
+    if (annotation.page == m_annotation.page && annotation.index == m_annotation.index) return;
+    m_annotation = annotation;
+    viewport()->update();
+    emit annotationSelectionChanged();
+}
+
+bool DocumentView::askText(const QString &title, const QString &label, QString *text)
+{
+    QInputDialog dialog(this);
+    dialog.setWindowTitle(title);
+    dialog.setLabelText(label);
+    dialog.setOption(QInputDialog::UsePlainTextEditForTextInput);
+    dialog.setTextValue(*text);
+    // Text from the file is shown, never interpreted as markup.
+    for (QLabel *l : dialog.findChildren<QLabel *>()) l->setTextFormat(Qt::PlainText);
+    if (dialog.exec() != QDialog::Accepted) return false;
+    *text = dialog.textValue();
+    return true;
+}
+
+void DocumentView::finishToolGesture()
+{
+    const int page = m_pressPage;
+    const QRectF r = QRectF(m_pressPagePt, m_toolEnd).normalized();
+    const bool click = r.width() < 3 && r.height() < 3;
+    const QPolygonF stroke = m_stroke;
+    m_stroke.clear();
+    viewport()->update();
+    bool ok = false;
+    switch (m_tool) {
+    case Tool::Note: {
+        QString text;
+        if (askText(tr("Add Note"), tr("Note:"), &text))
+            ok = m_pdf->addNote(page, m_pressPagePt - QPointF(10, 10), text, m_markupColor);
+        break;
+    }
+    case Tool::Draw: ok = m_pdf->addInk(page, {stroke}, m_penColor, 2); break;
+    case Tool::Rectangle:
+    case Tool::Oval:
+        if (!click)
+            ok = m_pdf->addShape(m_tool == Tool::Rectangle ? PdfDocument::Shape::Rectangle : PdfDocument::Shape::Oval,
+                                 page, r, m_penColor, 2);
+        break;
+    case Tool::TextBox: {
+        QString text;
+        if (!askText(tr("Add Text Box"), tr("Text:"), &text) || text.trimmed().isEmpty()) break;
+        // A click makes a box 200 points wide (as far as the page allows);
+        // the height always fits the text.
+        QRectF box = click ? QRectF(m_pressPagePt, QSizeF(200, 0)) : r;
+        box.setRight(qMin(box.right(), m_doc->pageSize(page).width()));
+        ok = m_pdf->addTextBox(page, box, text, m_penColor, m_textSize);
+        break;
+    }
+    default: break;
+    }
+    if (ok) emit annotationsChanged(page);
+}
+
+bool DocumentView::markSelection(PdfDocument::Markup type)
+{
+    if (!canAnnotate() || m_selection.boxes.isEmpty()) return false;
+    const int page = m_selection.page();
+    const bool ok = m_pdf->addMarkup(type, m_selection.boxes, m_markupColor);
+    clearSelection();
+    if (ok) emit annotationsChanged(page);
+    return ok;
+}
+
+void DocumentView::deleteSelectedAnnotation()
+{
+    if (!m_annotation.isValid() || m_annotation.isLocked || !canAnnotate()) return;
+    const PdfDocument::Annotation a = m_annotation;
+    selectAnnotation({});
+    if (m_pdf->removeAnnotation(a)) emit annotationsChanged(a.page);
+}
+
+void DocumentView::editSelectedAnnotation()
+{
+    if (!m_annotation.isValid() || !selectedAnnotationHasText() || m_annotation.isLocked || !canAnnotate()) return;
+    const PdfDocument::Annotation a = m_annotation;
+    QString text = a.contents;
+    if (!askText(a.isNote ? tr("Edit Note") : tr("Edit Text Box"), a.isNote ? tr("Note:") : tr("Text:"), &text) ||
+        text == a.contents)
+        return;
+    selectAnnotation({});
+    if (m_pdf->setAnnotationText(a, text)) emit annotationsChanged(a.page);
+}
+
+void DocumentView::contextMenuEvent(QContextMenuEvent *e)
+{
+    if (!canAnnotate()) return QAbstractScrollArea::contextMenuEvent(e);
+    const int page = pageAt(e->pos());
+    const PdfDocument::Annotation a = annotationAt(page, toPage(page, e->pos()));
+    QMenu menu(this);
+    if (a.isValid()) {
+        selectAnnotation(a);
+        if (a.isLocked) return;
+        if (a.isNote || a.isTextBox)
+            menu.addAction(a.isNote ? tr("Edit Note…") : tr("Edit Text…"), this, [this] { editSelectedAnnotation(); });
+        menu.addAction(tr("Delete Annotation"), this, [this] { deleteSelectedAnnotation(); });
+    } else if (hasSelection()) {
+        menu.addAction(tr("Highlight"), this, [this] { markSelection(PdfDocument::Markup::Highlight); });
+        menu.addAction(tr("Underline"), this, [this] { markSelection(PdfDocument::Markup::Underline); });
+        menu.addAction(tr("Strike Through"), this, [this] { markSelection(PdfDocument::Markup::StrikeOut); });
+    } else {
+        return QAbstractScrollArea::contextMenuEvent(e);
+    }
+    menu.exec(e->globalPos());
 }

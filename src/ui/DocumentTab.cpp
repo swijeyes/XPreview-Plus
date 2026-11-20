@@ -12,6 +12,7 @@
 #include "core/Limits.h"
 #include "image/ImageDocument.h"
 #include "pdf/PdfDocument.h"
+#include "pdf/PdfSecurity.h"
 #include "RenderService.h"
 #include "ThumbnailSidebar.h"
 
@@ -33,6 +34,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QUrl>
@@ -180,19 +182,10 @@ void DocumentTab::onLoaded()
         if (flow) m_infoBar->addAction(tr("Export as PDF…"), [this] { emit exportRequested(); });
         vbox->addWidget(m_infoBar);
     } else if (PdfDocument *p = pdf(); p && (p->hasForm() || p->isRestricted() || p->isConverted())) {
-        QStringList limits;
-        if (!p->canPrint()) limits << tr("printing");
-        if (!p->canCopy()) limits << tr("copying");
-        if (!p->canEditPages() || !p->canFillForms()) limits << tr("changes");
-        QStringList lines;
-        if (p->isConverted())
-            lines << tr("This %1 was converted to PDF for viewing. Use Save As to keep it as a PDF.").arg(p->kindName());
-        if (!limits.isEmpty())
-            lines << tr("The owner of this PDF does not allow %1.").arg(QLocale().createSeparatedList(limits));
-        if (p->hasForm()) lines << tr("This PDF has form fields you can fill in. Click a field to type in it.");
         m_infoBar = new InfoBar(content);
-        m_infoBar->setMessage(lines.join(QLatin1Char(' ')));
+        if (canUnlock()) m_infoBar->addAction(tr("Unlock…"), [this] { unlock(); });
         vbox->addWidget(m_infoBar);
+        updateInfoBar();
     }
 
     m_splitter = new QSplitter(Qt::Horizontal, content);
@@ -288,6 +281,8 @@ void DocumentTab::onLoaded()
         connect(m_thumbs, &ThumbnailSidebar::filesDropped, this, &DocumentTab::insertFiles);
         connect(m_thumbs, &ThumbnailSidebar::deleteRequested, this, &DocumentTab::deletePages);
         connect(m_thumbs->selectionModel(), &QItemSelectionModel::selectionChanged, this, &DocumentTab::stateChanged);
+        connect(m_view, &DocumentView::annotationsChanged, this, &DocumentTab::annotationsChanged);
+        connect(m_view, &DocumentView::annotationSelectionChanged, this, &DocumentTab::stateChanged);
         m_thumbs->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_thumbs, &QWidget::customContextMenuRequested, this, &DocumentTab::showPageMenu);
         QPointer<DocumentTab> self(this);
@@ -304,6 +299,25 @@ void DocumentTab::onLoaded()
     m_view->setFocus();
     emit loaded();
     emit stateChanged();
+}
+
+void DocumentTab::updateInfoBar()
+{
+    PdfDocument *p = pdf();
+    if (!m_infoBar || !p) return;
+    QStringList limits;
+    if (!p->canPrint()) limits << tr("printing");
+    if (!p->canCopy()) limits << tr("copying");
+    if (!p->canEditPages() || !p->canFillForms() || !p->canAnnotate()) limits << tr("changes");
+    QStringList lines;
+    if (p->isConverted())
+        lines << tr("This %1 was converted to PDF for viewing. Use Save As to keep it as a PDF.").arg(p->kindName());
+    if (!limits.isEmpty())
+        lines << tr("The owner of this PDF does not allow %1.").arg(QLocale().createSeparatedList(limits));
+    if (canUnlock()) lines << tr("Its owner password lifts these restrictions.");
+    if (p->hasForm()) lines << tr("This PDF has form fields you can fill in. Click a field to type in it.");
+    if (lines.isEmpty()) m_infoBar->hide();
+    else m_infoBar->setMessage(lines.join(QLatin1Char(' ')));
 }
 
 void DocumentTab::buildOutline()
@@ -419,6 +433,70 @@ bool DocumentTab::editProtection()
 }
 
 bool DocumentTab::isModified() const { return pdf() && pdf()->isModified(); }
+
+bool DocumentTab::willSaveProtected() const
+{
+    return pdf() && pdf()->protection().mode != PdfDocument::Protection::Mode::None;
+}
+
+bool DocumentTab::canChangeProtection() const
+{
+    return pdf() && !pdf()->isRestricted() && PdfSecurity::available();
+}
+
+bool DocumentTab::saveAs(const QString &path, bool protect)
+{
+    PdfDocument *p = pdf();
+    if (!p) return false;
+    if (protect != willSaveProtected() && canChangeProtection()) {
+        if (protect) {
+            if (!editProtection() || !willSaveProtected()) return false;
+        } else {
+            QString error;
+            if (!p->setProtection({}, &error)) {
+                showEditError(error);
+                return false;
+            }
+            emit modifiedChanged();
+        }
+    }
+    return save(path);
+}
+
+bool DocumentTab::canUnlock() const { return pdf() && pdf()->isEncrypted() && pdf()->isRestricted(); }
+
+void DocumentTab::unlock()
+{
+    PdfDocument *p = pdf();
+    if (!canUnlock()) return;
+    for (int tries = 0; tries < 20; ++tries) {
+        bool ok = false;
+        const QString prompt = tries == 0 ? tr("Enter the owner password of “%1” to lift its restrictions:").arg(title())
+                                          : tr("The owner password is incorrect. Enter the owner password of “%1”:").arg(title());
+        QByteArray pw = askPassword(this, prompt, &ok).toUtf8();
+        const auto wipe = qScopeGuard([&pw] { pw.fill('\0'); });
+        if (!ok || pw.isEmpty()) return;
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        const bool unlocked = p->unlock(pw);
+        QApplication::restoreOverrideCursor();
+        if (unlocked) break;
+        // A short pause after each wrong password slows guessing.
+        QThread::msleep(qMin(2000, 250 * (tries + 1)));
+    }
+    if (p->isRestricted()) return;
+    m_thumbs->setEditable(p->canEditPages());
+    if (m_infoBar) m_infoBar->clearActions();
+    updateInfoBar();
+    emit stateChanged();
+}
+
+void DocumentTab::annotationsChanged(int page)
+{
+    m_renderer->invalidatePage(page);
+    m_view->viewport()->update();
+    m_thumbs->viewport()->update();
+    emit stateChanged();
+}
 
 void DocumentTab::onDocumentChange(int change, int page)
 {

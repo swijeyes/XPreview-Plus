@@ -14,6 +14,7 @@
 #include "pdf/PdfDocument.h"
 #include "pdf/PdfSecurity.h"
 #include "PreferencesDialog.h"
+#include "SaveDialog.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -93,6 +94,42 @@ QIcon sidebarIcon()
         icon.addPixmap(pm);
     }
     return icon;
+}
+
+// A pen over a line: the markup (annotation) tools.
+QIcon markupIcon()
+{
+    QIcon icon;
+    for (int size : {16, 32, 64}) {
+        QPixmap pm(size, size);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QColor c = QApplication::palette().color(QPalette::ButtonText);
+        QPen pen(c, size / 16.0);
+        pen.setJoinStyle(Qt::RoundJoin);
+        p.setPen(pen);
+        const double s = size;
+        p.drawPolygon(QPolygonF{QPointF(s * 0.22, s * 0.72), QPointF(s * 0.68, s * 0.12), QPointF(s * 0.84, s * 0.26),
+                                QPointF(s * 0.38, s * 0.84), QPointF(s * 0.18, s * 0.88)});
+        p.drawLine(QPointF(s * 0.58, s * 0.26), QPointF(s * 0.74, s * 0.40));
+        p.setPen(QPen(c, size / 10.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(s * 0.46, s * 0.92), QPointF(s * 0.9, s * 0.92));
+        icon.addPixmap(pm);
+    }
+    return icon;
+}
+
+QIcon colourIcon(const QColor &colour)
+{
+    QPixmap pm(32, 32);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor(0, 0, 0, 90), 2));
+    p.setBrush(colour);
+    p.drawEllipse(QRectF(4, 4, 24, 24));
+    return QIcon(pm);
 }
 
 void drawMagnifier(QPainter &p, const QRectF &r, bool plus)
@@ -413,6 +450,31 @@ void MainWindow::createActions()
     auto tab = [this] { return currentTab(); };
     m_save = make(tr("Save"), QKeySequence::Save, [this, tab] { if (DocumentTab *t = tab()) saveTab(t); });
     m_protect = make(tr("Password Protection…"), {}, [tab] { if (DocumentTab *t = tab()) t->editProtection(); });
+    m_unlock = make(tr("Unlock with Owner Password…"), {}, [tab] { if (DocumentTab *t = tab()) t->unlock(); });
+
+    // Annotation tools: ⌃⌘1-9 on macOS (Qt's Ctrl is ⌘ there), Ctrl+Shift+1-9 elsewhere.
+#ifdef Q_OS_MACOS
+    const Qt::KeyboardModifiers toolKeys = Qt::ControlModifier | Qt::MetaModifier;
+#else
+    const Qt::KeyboardModifiers toolKeys = Qt::ControlModifier | Qt::ShiftModifier;
+#endif
+    m_toolGroup = new QActionGroup(this);
+    const QStringList toolNames = {tr("Select Text"), tr("Highlight"), tr("Underline"), tr("Strike Through"),
+                                   tr("Note"), tr("Draw"), tr("Rectangle"), tr("Oval"), tr("Text Box")};
+    for (int i = 0; i < toolNames.size(); ++i) {
+        QAction *a = make(toolNames[i], QKeySequence(QKeyCombination(toolKeys, Qt::Key(Qt::Key_1 + i))),
+                          [this, i] { setAnnotationTool(i); });
+        a->setCheckable(true);
+        m_toolGroup->addAction(a);
+        m_toolActions << a;
+    }
+    m_toolActions.first()->setChecked(true);
+    m_editAnnotation = make(tr("Edit Annotation Text…"), {}, [view] { if (auto *v = view()) v->editSelectedAnnotation(); });
+    m_deleteAnnotation = make(tr("Delete Annotation"), {}, [view] { if (auto *v = view()) v->deleteSelectedAnnotation(); });
+    QSettings settings;
+    m_markupColor = settings.value(QStringLiteral("annotate/markupColor"), QColor(255, 212, 0)).value<QColor>();
+    m_penColor = settings.value(QStringLiteral("annotate/penColor"), QColor(220, 30, 30)).value<QColor>();
+    m_textSize = qBound(6.0, settings.value(QStringLiteral("annotate/textSize"), 12.0).toDouble(), 72.0);
     m_saveAs = make(tr("Save As…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), [this] { saveAs(); });
     m_undo = make(tr("Undo"), QKeySequence::Undo, [tab] {
         DocumentTab *t = tab();
@@ -521,6 +583,7 @@ void MainWindow::createMenus()
     file->addAction(m_save);
     file->addAction(m_saveAs);
     file->addAction(m_protect);
+    file->addAction(m_unlock);
     file->addSeparator();
     file->addAction(m_export);
     file->addAction(m_print);
@@ -577,6 +640,37 @@ void MainWindow::createMenus()
     tools->addSeparator();
     tools->addAction(m_inspector);
 
+    QMenu *annotate = menuBar()->addMenu(tr("&Annotate"));
+    annotate->addActions(m_toolActions);
+    annotate->addSeparator();
+    m_annotateStyleMenus[0] = colourMenu(tr("Highlight and Note Colour"),
+                                         {{tr("Yellow"), QColor(255, 212, 0)}, {tr("Green"), QColor(110, 220, 90)},
+                                          {tr("Blue"), QColor(90, 180, 255)}, {tr("Pink"), QColor(255, 120, 200)},
+                                          {tr("Orange"), QColor(255, 150, 40)}},
+                                         &m_markupColor);
+    m_annotateStyleMenus[1] = colourMenu(tr("Pen and Text Colour"),
+                                         {{tr("Red"), QColor(220, 30, 30)}, {tr("Blue"), QColor(30, 90, 220)},
+                                          {tr("Green"), QColor(20, 150, 50)}, {tr("Black"), QColor(0, 0, 0)},
+                                          {tr("Purple"), QColor(140, 50, 190)}},
+                                         &m_penColor);
+    m_annotateStyleMenus[2] = new QMenu(tr("Text Size"), this);
+    auto *sizes = new QActionGroup(m_annotateStyleMenus[2]);
+    for (int size : {9, 10, 12, 14, 18, 24, 36}) {
+        QAction *a = m_annotateStyleMenus[2]->addAction(tr("%1 pt").arg(size));
+        a->setCheckable(true);
+        a->setChecked(qFuzzyCompare(m_textSize, double(size)));
+        sizes->addAction(a);
+        connect(a, &QAction::triggered, this, [this, size] {
+            m_textSize = size;
+            QSettings().setValue(QStringLiteral("annotate/textSize"), m_textSize);
+            applyAnnotationStyle();
+        });
+    }
+    for (QMenu *m : m_annotateStyleMenus) annotate->addMenu(m);
+    annotate->addSeparator();
+    annotate->addAction(m_editAnnotation);
+    annotate->addAction(m_deleteAnnotation);
+
     QMenu *help = menuBar()->addMenu(tr("&Help"));
     const QString name = QApplication::applicationDisplayName();
     auto *about = help->addAction(tr("About %1").arg(name), this, [this, name] {
@@ -584,7 +678,7 @@ void MainWindow::createMenus()
         QMessageBox::about(
             this, tr("About %1").arg(name),
             tr("<h3>%1 %2</h3><p>A fast viewer for PDF, PostScript, EPS, images, RTF and "
-               "OpenDocument text, with PDF form filling, page editing and password protection.</p>"
+               "OpenDocument text, with PDF annotation, form filling, page editing and password protection.</p>"
                "<p>%4</p>"
                "<p>This program is free software: you can redistribute it and/or modify it under "
                "the terms of the GNU Affero General Public License as published by the Free "
@@ -633,6 +727,22 @@ void MainWindow::createToolBar()
     gap(14);
     tb->addWidget(toolGroup(tr("Rotate"), {new TexturedButton(TexturedButton::First, m_rotLeft, this),
                                            new TexturedButton(TexturedButton::Last, m_rotRight, this)}, this));
+    gap(14);
+    // Markup: switches between selecting text and the last annotation tool;
+    // the menu picks a tool and colours.
+    m_markupButton = new TexturedButton(TexturedButton::Only, nullptr, this);
+    m_markupButton->setIcon(markupIcon());
+    m_markupButton->setToolTip(tr("Markup"));
+    m_markupButton->setCheckable(true);
+    m_markupButton->setPopupMode(QToolButton::MenuButtonPopup);
+    m_markupButton->setFixedWidth(44);
+    auto *markupMenu = new QMenu(m_markupButton);
+    markupMenu->addActions(m_toolActions.mid(1));
+    markupMenu->addSeparator();
+    for (QMenu *m : m_annotateStyleMenus) markupMenu->addMenu(m);
+    m_markupButton->setMenu(markupMenu);
+    connect(m_markupButton, &QToolButton::clicked, this, [this] { setAnnotationTool(m_tool == 0 ? m_lastTool : 0); });
+    tb->addWidget(toolGroup(tr("Markup"), {m_markupButton}, this));
 
     auto *spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -670,6 +780,45 @@ void MainWindow::createToolBar()
     });
 }
 
+void MainWindow::setAnnotationTool(int tool)
+{
+    tool = qBound(0, tool, int(m_toolActions.size()) - 1);
+    m_tool = tool;
+    if (tool != 0) m_lastTool = tool;
+    m_toolActions[tool]->setChecked(true);
+    if (m_markupButton) m_markupButton->setChecked(tool != 0);
+    for (int i = 0; i < m_tabs->count(); ++i)
+        if (auto *t = qobject_cast<DocumentTab *>(m_tabs->widget(i)); t && t->view())
+            t->view()->setTool(DocumentView::Tool(tool));
+    updateUi();
+}
+
+void MainWindow::applyAnnotationStyle()
+{
+    for (int i = 0; i < m_tabs->count(); ++i)
+        if (auto *t = qobject_cast<DocumentTab *>(m_tabs->widget(i)); t && t->view())
+            t->view()->setAnnotationStyle(m_markupColor, m_penColor, m_textSize);
+}
+
+QMenu *MainWindow::colourMenu(const QString &title, const QList<std::pair<QString, QColor>> &colours, QColor *target)
+{
+    auto *menu = new QMenu(title, this);
+    auto *group = new QActionGroup(menu);
+    const QString key = target == &m_markupColor ? QStringLiteral("annotate/markupColor") : QStringLiteral("annotate/penColor");
+    for (const auto &[name, colour] : colours) {
+        QAction *a = menu->addAction(colourIcon(colour), name);
+        a->setCheckable(true);
+        a->setChecked(*target == colour);
+        group->addAction(a);
+        connect(a, &QAction::triggered, this, [this, colour, target, key] {
+            *target = colour;
+            QSettings().setValue(key, colour);
+            applyAnnotationStyle();
+        });
+    }
+    return menu;
+}
+
 DocumentTab *MainWindow::currentTab() const
 {
     return qobject_cast<DocumentTab *>(m_tabs->currentWidget());
@@ -702,6 +851,15 @@ void MainWindow::updateUi()
     m_save->setEnabled(editable && (t->isModified() || t->needsSaveAs()));
     m_saveAs->setEnabled(editable);
     m_protect->setEnabled(pdf && !pdf->isRestricted() && PdfSecurity::available());
+    m_unlock->setEnabled(loaded && t->canUnlock());
+    DocumentView *view = loaded ? t->view() : nullptr;
+    const bool annotatable = view && view->canAnnotate();
+    for (QAction *a : m_toolActions) a->setEnabled(annotatable);
+    for (QMenu *m : m_annotateStyleMenus) m->setEnabled(annotatable);
+    m_markupButton->setEnabled(annotatable);
+    const bool annotationSelected = annotatable && view->hasSelectedAnnotation() && !view->selectedAnnotationIsLocked();
+    m_editAnnotation->setEnabled(annotationSelected && view->selectedAnnotationHasText());
+    m_deleteAnnotation->setEnabled(annotationSelected);
     m_print->setEnabled(loaded && (!pdf || pdf->canPrint()));
     m_undo->setEnabled(formFocus || (editable && t->canUndo()));
     m_redo->setEnabled(formFocus || (editable && t->canRedo()));
@@ -791,6 +949,11 @@ void MainWindow::openFile(const QString &path)
         if (tab == currentTab()) updateUi();
     });
     connect(tab, &DocumentTab::loaded, this, [this, tab] {
+        if (DocumentView *v = tab->view()) {
+            v->setAnnotationStyle(m_markupColor, m_penColor, m_textSize);
+            v->setTool(DocumentView::Tool(m_tool));
+            connect(v, &DocumentView::toolChanged, this, [this](DocumentView::Tool tool) { setAnnotationTool(int(tool)); });
+        }
         const int i = m_tabs->indexOf(tab);
         if (i >= 0 && tab->sniff().extensionMismatch)
             m_tabs->setTabToolTip(i, QStringLiteral("<p>%1<br>%2</p>")
@@ -863,9 +1026,13 @@ bool MainWindow::saveAs()
     const QFileInfo fi(t->path());
     const QString suggested = t->needsSaveAs() ? fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() + QStringLiteral(".pdf")
                                                : t->path();
-    QString path = QFileDialog::getSaveFileName(this, tr("Save As"), suggested, tr("PDF document (*.pdf)"));
+    bool protect = t->willSaveProtected();
+    const QString reason = !PdfSecurity::available()
+                               ? tr("This build of %1 cannot write encrypted PDFs.").arg(QApplication::applicationDisplayName())
+                               : tr("Only the owner of this PDF can change its protection. Unlock it with the owner password first.");
+    const QString path = SaveDialog::getSavePdfFileName(this, tr("Save As"), suggested, &protect,
+                                                        t->canChangeProtection(), reason);
     if (path.isEmpty()) return false;
-    if (!path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) path += QStringLiteral(".pdf");
     // Another tab showing that file would no longer match it.
     for (int i = 0; i < m_tabs->count(); ++i)
         if (auto *other = qobject_cast<DocumentTab *>(m_tabs->widget(i));
@@ -873,7 +1040,7 @@ bool MainWindow::saveAs()
             plainWarning(this, tr("Save As"), tr("“%1” is open in another tab. Close it first.").arg(other->title()));
             return false;
         }
-    return t->save(path);
+    return t->saveAs(path, protect);
 }
 
 void MainWindow::updateRecentMenu()

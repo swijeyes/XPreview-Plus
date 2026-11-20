@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/Document.h"
+#include "pdf/PdfDocument.h"
 
 #include <QAbstractScrollArea>
 #include <QElapsedTimer>
@@ -11,7 +12,6 @@
 
 #include <utility>
 
-class PdfDocument;
 class RenderService;
 
 // Page view: continuous vertical scroll, one page, or two pages side by
@@ -23,6 +23,9 @@ class DocumentView : public QAbstractScrollArea {
 public:
     enum class FitMode { None, Width, Page };
     enum class DisplayMode { Continuous, SinglePage, TwoPages };
+    // What a click or drag on a PDF page does. Every tool but Select adds
+    // annotations (when the PDF's owner allows it).
+    enum class Tool { Select, Highlight, Underline, StrikeOut, Note, Draw, Rectangle, Oval, TextBox };
 
     DocumentView(DocumentPtr doc, RenderService *renderer, QWidget *parent = nullptr);
 
@@ -66,11 +69,30 @@ public:
     QString selectedText() const { return m_selection.text; }
     void clearSelection();
 
+    // --- Annotations (PDFs) ----------------------------------------------
+    bool canAnnotate() const { return m_pdf && m_pdf->canAnnotate(); }
+    Tool tool() const { return m_tool; }
+    void setTool(Tool tool);
+    // Colours of new markup (highlights, underlines, strike-throughs, notes)
+    // and of drawings, shapes and text, and the text box font size.
+    void setAnnotationStyle(const QColor &markup, const QColor &pen, double textSize);
+    // Turns the selected text into a highlight, underline or strike-through.
+    bool markSelection(PdfDocument::Markup type);
+    // The annotation clicked last (Select tool), if any.
+    bool hasSelectedAnnotation() const { return m_annotation.isValid(); }
+    bool selectedAnnotationHasText() const { return m_annotation.isNote || m_annotation.isTextBox; }
+    bool selectedAnnotationIsLocked() const { return m_annotation.isLocked; }
+    void deleteSelectedAnnotation();
+    void editSelectedAnnotation();  // the text of a note or text box
+
 signals:
     void currentPageChanged(int page);
     void zoomChanged(double zoom);
     void selectionChanged();
     void internalLinkActivated(int page);
+    void toolChanged(Tool tool);  // the view went back to Select by itself (Escape)
+    void annotationsChanged(int page);
+    void annotationSelectionChanged();
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -83,6 +105,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
     void keyPressEvent(QKeyEvent *) override;
+    void contextMenuEvent(QContextMenuEvent *) override;
     bool viewportEvent(QEvent *) override;
     bool event(QEvent *) override;
     bool focusNextPrevChild(bool next) override;
@@ -105,6 +128,12 @@ private:
     void updateCursor(QPointF pos);
     void openLink(const QString &link);
     bool formKeyPress(QKeyEvent *e);
+    // Annotations of a page, cached until they or the pages change.
+    const QVector<PdfDocument::Annotation> &pageAnnotations(int page);
+    PdfDocument::Annotation annotationAt(int page, QPointF pt);
+    void selectAnnotation(const PdfDocument::Annotation &annotation);
+    void finishToolGesture();
+    bool askText(const QString &title, const QString &label, QString *text);
 
     DocumentPtr m_doc;
     PdfDocument *m_pdf = nullptr;  // m_doc, when it is a PDF
@@ -138,4 +167,16 @@ private:
     QPoint m_panStart;
     QPoint m_scrollStart;
     TextHit m_selection;
+
+    // Annotation state
+    Tool m_tool = Tool::Select;
+    QColor m_markupColor{255, 212, 0};
+    QColor m_penColor{220, 30, 30};
+    double m_textSize = 12;
+    bool m_toolDrag = false;  // drawing, or dragging out a shape or text box
+    QPolygonF m_stroke;       // the drawing so far, page points
+    QPointF m_toolEnd;
+    PdfDocument::Annotation m_annotation;
+    QHash<int, QVector<PdfDocument::Annotation>> m_annotCache;
+    qint64 m_annotCacheRevision = -1;
 };

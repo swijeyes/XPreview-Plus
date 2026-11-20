@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(XPreview VERSION 2.1.0 LANGUAGES C CXX)
+project(XPreview VERSION 3.0.0 LANGUAGES C CXX)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 set(APP_DISPLAY_NAME "XPreview+")
@@ -119,6 +119,7 @@ add_library(xpreview_ui STATIC
     src/ui/PreferencesDialog.cpp
     src/ui/ProtectionDialog.cpp
     src/ui/Preferences.cpp
+    src/ui/SaveDialog.cpp
     src/ui/DocumentTab.cpp
     src/ui/DocumentView.cpp
     src/ui/RenderService.cpp
@@ -126,6 +127,14 @@ add_library(xpreview_ui STATIC
     src/ui/InfoBar.cpp
 )
 target_link_libraries(xpreview_ui PUBLIC xpreview_core Qt6::Widgets)
+if(APPLE)
+    # The native save panel: Objective-C++, built by the C++ compiler so it
+    # uses the same SDK and flags as everything else.
+    target_sources(xpreview_ui PRIVATE src/ui/SaveDialog_mac.mm)
+    set_source_files_properties(src/ui/SaveDialog_mac.mm PROPERTIES
+        LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
+    target_link_libraries(xpreview_ui PRIVATE "-framework AppKit" "-framework UniformTypeIdentifiers")
+endif()
 
 set(APP_SOURCES src/main.cpp)
 
@@ -199,6 +208,7 @@ set_target_properties(xpreview-render PROPERTIES BUILD_RPATH "${PDFIUM_DIR}/lib"
 enable_testing()
 add_executable(xpreview-tests tests/tst_importers.cpp)
 target_link_libraries(xpreview-tests PRIVATE xpreview_core Qt6::Test)
+target_include_directories(xpreview-tests PRIVATE ${PDFIUM_INCLUDE_DIR})
 set_target_properties(xpreview-tests PROPERTIES BUILD_RPATH "${PDFIUM_DIR}/lib")
 add_test(NAME importers COMMAND xpreview-tests)
 

@@ -1,0 +1,28 @@
+# Build trees
+build/
+build-*/
+dist/
+
+# Release artifacts are published as GitHub Release assets, not committed
+release/
+
+# Downloaded by scripts/fetch-deps.sh and scripts/fetch-windows-deps.sh
+third_party/
+resources/fonts/*.ttf
+
+# Test outputs
+tests/corpus/out/
+tests/corpus/exp/
+
+# OS / editor noise
+.cache/
+compile_commands.json
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Private working files (not part of the distribution)
+plan/
+icon/
+github_upload.txt

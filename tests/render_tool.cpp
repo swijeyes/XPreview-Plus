@@ -3,7 +3,7 @@
 
 // xpreview-render: headless renderer for golden tests and importer debugging.
 //   xpreview-render <file> [--out DIR] [--scale S] [--pdf OUT.pdf] [--pages N]
-//                   [--search TEXT] [--rotate DEG]
+//                   [--search TEXT] [--rotate DEG] [--password PW]
 #include "core/DocumentLoader.h"
 #include "core/Exporter.h"
 #include "core/FontSubstitution.h"
@@ -26,6 +26,7 @@ int main(int argc, char **argv)
     }
     const QString file = args.takeFirst();
     QString outDir, pdfOut, search;
+    QByteArray password;
     double scale = 1.5;
     int maxPages = 3, rotate = 0;
     while (!args.isEmpty()) {
@@ -36,9 +37,10 @@ int main(int argc, char **argv)
         else if (a == "--pages" && !args.isEmpty()) maxPages = args.takeFirst().toInt();
         else if (a == "--search" && !args.isEmpty()) search = args.takeFirst();
         else if (a == "--rotate" && !args.isEmpty()) rotate = args.takeFirst().toInt();
+        else if (a == "--password" && !args.isEmpty()) password = args.takeFirst().toUtf8();
     }
 
-    const LoadResult r = loadDocument(file);
+    const LoadResult r = loadDocument(file, password);
     if (!r.document) {
         out << "ERROR: " << r.error << "\n";
         return 1;

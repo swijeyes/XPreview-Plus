@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QFontDatabase>
 #include <QHash>
@@ -94,6 +95,13 @@ QString familyFromPostScript(const QString &name)
 }  // namespace
 
 namespace FontSubstitution {
+
+QString bundledFontFile(const QString &fileName)
+{
+    for (const QString &dir : fontDirs())
+        if (QFileInfo(QDir(dir).filePath(fileName)).isFile()) return QDir(dir).filePath(fileName);
+    return {};
+}
 
 void loadBundledFonts()
 {

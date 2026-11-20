@@ -44,6 +44,18 @@ InfoBar::InfoBar(QWidget *parent) : QFrame(parent)
 
 void InfoBar::setMessage(const QString &text) { m_label->setText(text); }
 
+void InfoBar::clearActions()
+{
+    // Later: this may run from one of the buttons' own click handlers.
+    while (QLayoutItem *item = m_buttons->takeAt(0)) {
+        if (QWidget *w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
+        delete item;
+    }
+}
+
 void InfoBar::addAction(const QString &label, std::function<void()> fn)
 {
     auto *b = new QPushButton(label, this);

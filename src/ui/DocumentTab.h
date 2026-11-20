@@ -61,6 +61,10 @@ public:
     bool canEditPages() const;
     // Converted from another format: saving needs a new PDF file.
     bool needsSaveAs() const;
+    // A PDF opened without its owner password, which would lift its restrictions.
+    bool canUnlock() const;
+    // Asks for the owner password and lifts the restrictions.
+    void unlock();
     // Shows the Password Protection dialog; true if the protection changed.
     bool editProtection();
     bool isModified() const;
@@ -84,6 +88,13 @@ public:
     void redo();
     // Saves to the file, or to `path` (Save As), which the tab then shows.
     bool save(const QString &path = {});
+    // Save As with the save dialog's "Protect with password" choice: turning
+    // it on asks for the password(s) first (cancel: nothing is saved); turning
+    // it off saves without protection. Left as it was, the protection stays.
+    bool saveAs(const QString &path, bool protect);
+    // Whether the PDF will be saved encrypted, and whether that can change.
+    bool willSaveProtected() const;
+    bool canChangeProtection() const;
     // Writes the selected pages as a new PDF.
     void exportPages();
 
@@ -104,6 +115,8 @@ private:
     void showEditError(const QString &message);
     void onDocumentChange(int change, int page);
     void showPageMenu(const QPoint &pos);
+    void updateInfoBar();
+    void annotationsChanged(int page);
 
     QString m_path;
     DocumentPtr m_doc;

@@ -5,7 +5,9 @@
 
 #include "core/Document.h"
 
+#include <QColor>
 #include <QHash>
+#include <QPolygonF>
 
 #include <atomic>
 #include <functional>
@@ -20,9 +22,13 @@ struct fpdf_form_handle_t__;
 //
 // Besides viewing, a PDF can be edited: interactive form fields are filled
 // in through PDFium's form-fill environment, and pages can be reordered,
-// rotated, deleted and inserted (from other PDFs). Edits live in memory
-// until save() writes them out. Page edits can be undone; each undo step is
-// a snapshot of the whole document.
+// rotated, deleted and inserted (from other PDFs), and annotated (highlights,
+// notes, drawings, shapes, text boxes). Edits live in memory until save()
+// writes them out. Page and annotation edits can be undone; each undo step
+// is a snapshot of the whole document.
+//
+// Encrypted PDFs that PDFium refuses but qpdf can read (damaged encryption
+// dictionaries, for example) are opened from qpdf's decrypted copy.
 class PdfDocument : public Document {
 public:
     enum class LoadError { None, File, Format, Password, Security, Unknown };
@@ -30,6 +36,8 @@ public:
     enum class Change { Appearance, Modified, FormFocus };
     enum class Mouse { Move, Press, Release, DoubleClick };
 
+    // LoadError::Security: an encryption PDFium and qpdf cannot read (such as
+    // certificate or DRM protection).
     static std::shared_ptr<PdfDocument> open(const QString &path, const QByteArray &password,
                                              LoadError *error);
     // PDF bytes converted from another format (PostScript, EPS). The
@@ -82,6 +90,8 @@ public:
         bool restricts() const { return !(allowPrint && allowCopy && allowChanges); }
     };
     bool isEncrypted() const { return m_securityRevision >= 0; }  // the file as opened
+    // Opened from qpdf's decrypted copy (see the class comment).
+    bool isDecryptedCopy() const { return m_decryptedCopy; }
     QString encryptionDescription() const;
     // What whoever opened the document may do. The owner password, or an
     // unencrypted file, allows everything.
@@ -89,7 +99,13 @@ public:
     bool canCopy() const { return m_permissions & 0x10; }
     bool canEditPages() const { return m_permissions & (0x8 | 0x400); }
     bool canFillForms() const { return m_permissions & (0x20 | 0x100); }
-    bool isRestricted() const { return !(canPrint() && canCopy() && canEditPages() && canFillForms()); }
+    bool canAnnotate() const { return m_permissions & 0x20; }
+    bool isRestricted() const {
+        return !(canPrint() && canCopy() && canEditPages() && canFillForms() && canAnnotate());
+    }
+    // Lifts the restrictions of a PDF opened without its owner password.
+    // False (and nothing changes) if `ownerPassword` is not the owner password.
+    bool unlock(const QByteArray &ownerPassword);
     const Protection &protection() const { return m_protection; }
     // Takes effect when the document is next saved; marks it modified.
     bool setProtection(const Protection &protection, QString *error);
@@ -116,6 +132,37 @@ public:
     bool formRedo();
     // Field name -> value (text fields, choices, "On"/"Off" for buttons).
     QMap<QString, QString> formValues();
+
+    // --- Annotations ------------------------------------------------------
+    // Positions are in page points (origin top-left), as everywhere else.
+    enum class Markup { Highlight, Underline, StrikeOut };
+    enum class Shape { Rectangle, Oval };
+    struct Annotation {
+        int page = -1;      // -1: none
+        int index = -1;     // in the page's annotation list; changes with edits
+        int subtype = 0;    // FPDF_ANNOT_*
+        QRectF rect;
+        QString contents;   // the comment (note text, text box text)
+        bool isNote = false;     // a sticky note
+        bool isTextBox = false;  // a text box added by XPreview+
+        bool isLocked = false;   // marked locked or read-only: not to be changed
+        bool isValid() const { return page >= 0; }
+    };
+    bool addMarkup(Markup type, const QVector<PageRect> &boxes, const QColor &color);
+    bool addNote(int page, QPointF at, const QString &text, const QColor &color);
+    bool addInk(int page, const QVector<QPolygonF> &strokes, const QColor &color, double width);
+    bool addShape(Shape shape, int page, const QRectF &rect, const QColor &color, double width);
+    bool addTextBox(int page, const QRectF &rect, const QString &text, const QColor &color, double fontSize);
+    // Comments and markup on a page, bottom to top. Form fields, links and
+    // pop-up windows are not included.
+    QVector<Annotation> annotations(int page);
+    // The topmost annotation under a point, if any.
+    Annotation annotationAt(int page, QPointF pt);
+    bool removeAnnotation(const Annotation &annotation);
+    // Changes the text of a note or text box.
+    bool setAnnotationText(const Annotation &annotation, const QString &text);
+    // Annotation edits change appearance only, not the page structure.
+    int annotationRevision() const { return m_annotRevision; }
 
     // --- Page editing -----------------------------------------------------
     bool isModified() const { return m_modified; }
@@ -177,7 +224,13 @@ private:
     // Page edits: snapshot() before, finishEdit() after a successful change
     // (both with the lock held).
     bool snapshot(const QString &label, Snapshot *out);
-    void finishEdit(Snapshot &&before);
+    // `structural`: pages changed (sizes, order), not just annotations.
+    void finishEdit(Snapshot &&before, bool structural = true);
+    // Annotation edits: the change runs between snapshot() and finishEdit().
+    bool editAnnotations(const QString &label, int page, const std::function<bool(fpdf_page_t__ *)> &change);
+    bool loadDecrypted(const QString &path, const QByteArray &password, LoadError *error);
+    // Adds a text box annotation to a loaded page (lock held).
+    bool createTextBox(fpdf_page_t__ *p, int page, QRectF rect, QString text, const QColor &color, double fontSize);
     // The document, decrypted, as PDFium writes it (lock held).
     bool writePlain(QIODevice *out);
     QByteArray plainBytes(QString *error);  // commits form edits first
@@ -192,6 +245,7 @@ private:
     int m_securityRevision = -1;   // of the file as opened; -1 = not encrypted
     unsigned long m_permissions = 0xffffffff;
     QByteArray m_encryptedOriginal;  // the encrypted file, for Protection::Mode::Original
+    bool m_decryptedCopy = false;
     Protection m_protection;
     QVector<QSizeF> m_pageSizes;
     // Small LRU of loaded pages; PDFium pages are expensive to keep forever.
@@ -210,5 +264,6 @@ private:
     int m_state = 0, m_savedState = 0, m_lastState = 0;
     std::atomic<bool> m_modified{false};
     std::atomic<int> m_revision{0};
+    std::atomic<int> m_annotRevision{0};
     QList<Snapshot> m_undo, m_redo;
 };

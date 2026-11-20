@@ -46,7 +46,7 @@
 
 \hypersetup{colorlinks=true, linkcolor=brand, urlcolor=brand,
   pdftitle={XPreview+ User Manual}, pdfauthor={Sanjeeva Wijeyesakere},
-  pdfsubject={User manual for XPreview+ 2.1}}
+  pdfsubject={User manual for XPreview+ 3.0}}
 
 \setlist{itemsep=2pt, topsep=4pt}
 \setlength{\parindent}{0pt}
@@ -69,7 +69,7 @@
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\sffamily XPreview+ 2.1 User Manual}
+\fancyhead[L]{\small\sffamily XPreview+ 3.0 User Manual}
 \fancyhead[R]{\small\sffamily\nouppercase{\leftmark}}
 \fancyfoot[C]{\small\sffamily\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
@@ -111,7 +111,7 @@
   \vspace{0.4cm}
   {\sffamily\Large User Manual\par}
   \vspace{0.3cm}
-  {\sffamily\large Version 2.1\par}
+  {\sffamily\large Version 3.0\par}
   \vspace{1.6cm}
   {\large A fast viewer for PDF documents, images, RTF and OpenDocument text,\\
   with PDF form filling, page editing, and export of anything to PDF.\par}
@@ -131,12 +131,13 @@
 
 \app{} is a document and image viewer in the spirit of a built-in document viewer. It opens a
 file almost instantly, shows it page by page, lets you search, select and copy
-text, and can turn any file it opens into a PDF. PDFs can also be edited: fill in their forms,
-and rearrange, rotate, delete and combine their pages. It runs on macOS and Windows, and can be built for Linux.
+text, and can turn any file it opens into a PDF. PDFs can also be edited: annotate them with
+highlights, notes, drawings and text, fill in their forms, and rearrange, rotate, delete and
+combine their pages. It runs on macOS, Windows and Linux.
 
 \subsection{What \app{} can open}
 \begin{itemize}
-  \item \textbf{PDF documents}, including password-protected ones.
+  \item \textbf{PDF documents}, including password-protected and encrypted ones.
   \item \textbf{Images}: PNG, JPEG, GIF, WebP, TIFF (including multi-page TIFF), BMP,
         SVG and more; HEIC on macOS. See Section~\ref{sec:formats} for the complete list.
   \item \textbf{Rich Text Format} (\file{.rtf}) documents, such as those from TextEdit, WordPad or Word.
@@ -148,6 +149,8 @@ and rearrange, rotate, delete and combine their pages. It runs on macOS and Wind
 \begin{itemize}
   \item \textbf{Page thumbnails} and a \textbf{table of contents} in the sidebar.
   \item \textbf{Export as PDF} for every file type.
+  \item \textbf{Annotate PDFs}: highlight, underline and strike through text, and add notes,
+        drawings, rectangles, ovals and text boxes.
   \item \textbf{Fill in PDF forms}: text fields, check boxes, radio buttons and lists.
   \item \textbf{Edit PDF pages}: drag thumbnails to reorder pages, drop other PDFs (or images and
         documents) into the sidebar to combine files, and rotate, delete or insert pages.
@@ -168,7 +171,7 @@ thumbnails in the sidebar.}
 \textbf{Requirements:} a Mac with Apple silicon (M-series) and a recent version of macOS.
 
 \begin{enumerate}
-  \item Download \file{XPreviewPlus-2.1-macos-arm64.dmg} from the project's
+  \item Download \file{XPreviewPlus-3.0-macos-arm64.dmg} from the project's
         \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
   \item Double-click the downloaded file to open it.
   \item Drag the \ui{\app} icon onto the \ui{Applications} folder shown next to it.
@@ -196,7 +199,7 @@ see Section~\ref{sec:settings}.
 \app{} for Windows is \emph{portable}. There is no installer, and it never writes to the
 Windows registry.
 \begin{enumerate}
-  \item Download \file{XPreviewPlus-2.1-windows-x64-portable.zip} from the
+  \item Download \file{XPreviewPlus-3.0-windows-x64-portable.zip} from the
         \href{https://github.com/swijeyes/XPreview-Plus/releases/latest}{Releases page}.
   \item Right-click the zip file, choose \ui{Extract All\ldots}, and pick a folder,
         for example your \file{Documents} folder or a USB stick.
@@ -213,8 +216,24 @@ Your settings are stored in a \file{settings} folder inside it. To remove \app{}
 \end{note}
 
 \subsection{Linux}
-There is no ready-made Linux package yet. \app{} can be built from source; see
-the \file{README} in the project repository.
+Three downloads are offered for 64-bit Intel and AMD PCs (x86\_64). All of them need a system
+from 2022 or later (glibc 2.35: Ubuntu 22.04, Debian 12, Fedora 36, openSUSE Leap 16 or newer).
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[AppImage (any distribution)] Download
+        \file{XPreviewPlus-3.0-linux-x86\_64.AppImage}, make it executable (in a terminal:
+        \texttt{chmod +x XPreviewPlus-3.0-linux-x86\_64.AppImage}, or tick ``Allow executing''
+        in its properties), and double-click it. Nothing is installed.
+  \item[Debian and Ubuntu] Download \file{xpreview-plus\_3.0-1\_amd64.deb} and install it
+        with \texttt{sudo apt install ./xpreview-plus\_3.0-1\_amd64.deb}.
+  \item[Fedora and openSUSE] Download \file{xpreview-plus-3.0-1.x86\_64.rpm} and install it
+        with \texttt{sudo dnf install ./xpreview-plus-3.0-1.x86\_64.rpm} (Fedora) or
+        \texttt{sudo zypper install ./xpreview-plus-3.0-1.x86\_64.rpm} (openSUSE).
+\end{description}
+The packages add \app{} to the applications menu and install the \texttt{xpreview-plus}
+command; they include the Qt and qpdf versions \app{} needs, and install Ghostscript (for
+PostScript and EPS) from your distribution. With the AppImage, install Ghostscript yourself
+to open PostScript and EPS files. \app{} can also be built from source; see the \file{README}
+in the project repository.
 
 \subsection{Checking your download (optional)}
 Each download on the Releases page has a matching \file{.sha256} file containing its
@@ -235,6 +254,9 @@ From left to right:
         to choose between \ui{Thumbnails} and \ui{Table of Contents}.
   \item[Zoom out / Zoom in] Step the zoom down or up.
   \item[Rotate left / Rotate right] Turn the pages a quarter turn.
+  \item[Markup] Click to switch between selecting text and the last annotation tool you used.
+        Click the small arrow next to it to choose a tool or a colour
+        (Section~\ref{sec:annotate}).
   \item[Export as PDF] Save the current document as a PDF (Section~\ref{sec:export}).
   \item[Search field] Find text in the document (Section~\ref{sec:search}). The number of
         results appears to its left.
@@ -259,7 +281,8 @@ choose \ui{Fit Width}, \ui{Fit Page} or a percentage from it, or type a value su
 \subsection{Information bar}
 For RTF and ODT documents that \app{} had to simplify, a yellow bar appears above the page
 (Section~\ref{sec:simplified}). For PDFs with fillable form fields, the bar says so
-(Section~\ref{sec:forms}). Click the \ui{×} button on its right to dismiss it.
+(Section~\ref{sec:forms}). For PDFs with restrictions, it says what is restricted and offers
+\ui{Unlock\ldots} (Section~\ref{sec:unlock}). Click the \ui{×} button on its right to dismiss it.
 
 \subsection{Tabs}
 Each file you open gets its own tab. The tab bar appears as soon as two or more files are open.
@@ -293,11 +316,19 @@ supported, from older RC4 files to AES-256. If the password is wrong, \app{} say
 again; each further try waits a little longer. If you cancel, the tab shows a message instead
 of the document; close it and open the file again to retry.
 
+\app{} also opens encrypted PDFs whose encryption information is slightly damaged, which
+some other viewers refuse even with the right password. PDFs protected with a
+\textbf{certificate} or a \textbf{DRM} system (rather than a password) can only be opened in
+the application they were made for; \app{} says so instead of asking for a password.
+
+\subsubsection*{Restricted PDFs and the owner password}\label{sec:unlock}
 Some PDFs open without a password but carry \textbf{restrictions} set by their owner: no
 printing, no copying, or no changes. \app{} honours them --- the yellow bar says what is
-restricted, and the matching commands are unavailable. Opening the file with its
-\emph{owner} password lifts the restrictions. Section~\ref{sec:protect} explains how to protect
-your own PDFs.
+restricted, and the matching commands are unavailable. If you have the PDF's \emph{owner}
+password, click \ui{Unlock\ldots} in the yellow bar (or choose
+\menu{File > Unlock with Owner Password\ldots}) and enter it to lift the restrictions. Changes
+you made before unlocking are kept. Entering the owner password when \app{} first asks for a
+password has the same effect. Section~\ref{sec:protect} explains how to protect your own PDFs.
 
 \subsection{PostScript and EPS files}
 \app{} opens PostScript (\file{.ps}) and Encapsulated PostScript (\file{.eps}) files by turning
@@ -446,6 +477,54 @@ written completely, so a failed or interrupted export never leaves a broken file
 \end{note}
 
 % ================================================================
+\section{Annotating PDFs}\label{sec:annotate}
+
+Annotations are comments and markup on top of a PDF's pages: highlights, notes, drawings and
+the like. They are saved in the PDF in the standard way, so other PDF applications show them
+too, and they never change the document's own text.
+
+Choose a tool from the \menu{Annotate} menu, or from the menu of the \ui{Markup} button in the
+toolbar. Clicking the \ui{Markup} button itself switches between selecting text and the last
+tool you used. Press \key{Esc} to go back to selecting text.
+
+\begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
+  \item[Highlight, Underline, Strike Through] Drag across text, as you would to select it. When
+        you release the mouse button, the text is marked. You can also select text first, then
+        right-click it and choose \ui{Highlight}, \ui{Underline} or \ui{Strike Through}.
+  \item[Note] Click where the note should go and type its text. Notes appear as a small note
+        icon; point at one to read it.
+  \item[Draw] Drag to draw a freehand line.
+  \item[Rectangle, Oval] Drag out the shape.
+  \item[Text Box] Click (for a box 200 points wide) or drag out a box, then type the text. The
+        text wraps to the width of the box, and the box grows downwards to fit it.
+\end{description}
+
+The \menu{Annotate} menu (and the \ui{Markup} menu) also sets the colours: one for
+highlights, underlines, strike-throughs and notes, and one for drawings, shapes and text
+boxes, plus the \ui{Text Size} of new text boxes. \app{} remembers your choices.
+
+\subsection{Changing and removing annotations}
+With the text selection tool (\menu{Annotate > Select Text}), click an annotation to select
+it; a dashed outline appears around it.
+\begin{itemize}
+  \item Press \key{Delete} or \key{Backspace}, or choose \menu{Annotate > Delete Annotation},
+        to remove it.
+  \item Double-click a note or text box, or press \key{Return} when it is selected, to change
+        its text.
+  \item Right-click an annotation for the same commands.
+\end{itemize}
+Annotations from other applications can be selected and deleted in the same way; those marked
+as locked cannot. \menu{Edit > Undo} takes back adding, changing or deleting an annotation.
+Save the PDF to keep your annotations (Section~\ref{sec:saving}).
+
+\begin{note}
+If the owner of a PDF does not allow changes, the annotation tools are unavailable. Text
+boxes use the Arimo font (which looks like Helvetica and Arial) for text beyond Western
+European letters; characters it does not include, such as Chinese or Japanese, cannot be
+shown in text boxes yet. Notes can contain any text.
+\end{note}
+
+% ================================================================
 \section{Filling in PDF forms}\label{sec:forms}
 
 Many PDFs --- applications, tax forms, registration sheets --- contain \textbf{form fields}.
@@ -521,9 +600,9 @@ All of these are also in the menu that appears when you right-click (or \key{Ctr
 thumbnail.
 
 \subsection{Undo}
-\menu{Edit > Undo} (\key{Cmd}+\key{Z}) takes back the last page change, and
+\menu{Edit > Undo} (\key{Cmd}+\key{Z}) takes back the last page or annotation change, and
 \menu{Edit > Redo} (\key{Shift}+\key{Cmd}+\key{Z}) puts it back. The menu names the change,
-for example \menu{Undo Move Page}. The last 20 page changes can be undone.
+for example \menu{Undo Move Page} or \menu{Undo Highlight}. The last 20 changes can be undone.
 
 \begin{note}
 When you combine PDFs, the pages you insert keep their look, but form fields on them can no
@@ -540,6 +619,8 @@ asterisk. The tab of an edited document shows a dot (•) after its name.
   \item[Save] \menu{File > Save} (\key{Cmd}+\key{S}) writes the changes into the PDF.
   \item[Save As] \menu{File > Save As\ldots} (\key{Shift}+\key{Cmd}+\key{S}) writes them to a
         new file and leaves the original as it was. The window then shows the new file.
+        Tick \ui{Protect with password} in the Save As dialog to save the new file encrypted
+        (see below).
   \item[Export as PDF] also includes your changes, without changing which file is open.
 \end{description}
 If you close a tab or window, or quit, with unsaved changes, \app{} asks whether to save them.
@@ -549,7 +630,20 @@ completely.
 % ================================================================
 \section{Password protection}\label{sec:protect}
 
-Choose \menu{File > Password Protection\ldots} to protect a PDF. You can:
+There are two ways to protect a PDF with a password:
+\begin{itemize}
+  \item In the \menu{File > Save As\ldots} dialog, tick \ui{Protect with password} and click
+        \ui{Save}. \app{} asks for the password (and, if you like, restrictions, as below)
+        before the file is written; click \ui{Cancel} there and nothing is saved. The check
+        box is already ticked for a PDF that is protected: leave it ticked to keep that
+        protection, or untick it to save an unprotected copy.
+  \item Choose \menu{File > Password Protection\ldots}, then save.
+\end{itemize}
+The check box cannot be changed for a PDF opened without its owner password (unlock it
+first, Section~\ref{sec:unlock}), or in a build of \app{} that cannot write encrypted PDFs
+(currently the Windows build).
+
+In the Password Protection dialog you can:
 \begin{description}[style=nextline, leftmargin=2.2em, font=\sffamily\bfseries]
   \item[Require a password to open it] Nobody can see the document without the password.
   \item[Restrict printing, copying and changes] Others can open the PDF but not print it, copy
@@ -701,6 +795,15 @@ Go to page & \key{Option}+\key{Cmd}+\key{G} & \key{Ctrl}+\key{Alt}+\key{G} \\
 Rotate left / right & \key{Cmd}+\key{L} / \key{Cmd}+\key{R} & \key{Ctrl}+\key{L} / \key{Ctrl}+\key{R} \\
 Rotate page left / right & \key{Shift}+\key{Cmd}+\key{L} / \key{R} & \key{Ctrl}+\key{Shift}+\key{L} / \key{R} \\
 Show Inspector & \key{Cmd}+\key{I} & \key{Ctrl}+\key{I} \\
+\midrule
+\multicolumn{3}{l}{\sffamily\bfseries Annotate} \\
+Select Text & \key{Ctrl}+\key{Cmd}+\key{1} & \key{Ctrl}+\key{Shift}+\key{1} \\
+Highlight / Underline / Strike Through & \key{Ctrl}+\key{Cmd}+\key{2} / \key{3} / \key{4} & \key{Ctrl}+\key{Shift}+\key{2} / \key{3} / \key{4} \\
+Note / Draw & \key{Ctrl}+\key{Cmd}+\key{5} / \key{6} & \key{Ctrl}+\key{Shift}+\key{5} / \key{6} \\
+Rectangle / Oval / Text Box & \key{Ctrl}+\key{Cmd}+\key{7} / \key{8} / \key{9} & \key{Ctrl}+\key{Shift}+\key{7} / \key{8} / \key{9} \\
+Back to selecting text & \key{Esc} & \key{Esc} \\
+Delete selected annotation & \key{Delete} & \key{Delete} \\
+Edit selected note or text box & \key{Return} & \key{Enter} \\
 \midrule
 \multicolumn{3}{l}{\sffamily\bfseries In the page view} \\
 Screen down / up & \key{Space} / \key{Shift}+\key{Space} & \key{Space} / \key{Shift}+\key{Space} \\

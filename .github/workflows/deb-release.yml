@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Builds a .deb package for Debian and Ubuntu (amd64), checks that it installs
 # and starts on clean Ubuntu 22.04/24.04 and Debian 12/13 systems, and keeps it
-# as a workflow artifact. With a release tag it is also attached to that
-# existing GitHub Release. Run it by hand: Actions > Debian package > Run
-# workflow.
+# as a workflow artifact. It runs when a GitHub Release is published and
+# attaches the .deb to it; it can also be run by hand (Actions > Debian
+# package > Run workflow) for an existing release tag, or with no tag to only
+# build it.
 #
 # Qt 6.11 is included in the package (in /opt/xpreview-plus), because these
 # distributions ship Qt older than the 6.5 XPreview+ needs. Everything else
@@ -12,12 +13,15 @@
 name: Debian package
 
 on:
+  # Publishing a GitHub Release builds and attaches the files automatically.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag to attach the .deb to (empty = build only)
         required: false
-        default: v2.1
+        default: v3.0
 
 permissions:
   contents: write
@@ -61,7 +65,8 @@ jobs:
             dpkg-dev lintian desktop-file-utils \
             libgl1-mesa-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libdbus-1-3
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libdbus-1-3 \
+            zlib1g-dev libjpeg-dev
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -82,10 +87,21 @@ jobs:
           unzip -qo miniz.zip -d third_party/windows/miniz
           rm miniz.zip
 
+      # qpdf writes encrypted PDFs (Password Protection, "Protect with
+      # password" in Save As). Ubuntu 22.04's qpdf is too old: a pinned,
+      # checksummed release is built and bundled with the app.
+      - name: Build qpdf
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: scripts/build-qpdf.sh
+
       - name: Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-            -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+            -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$PWD/third_party/qpdf" | tee configure.log
+          grep -q "encrypted PDF saving enabled" configure.log || { echo "error: qpdf was not found" >&2; exit 1; }
           cmake --build build
 
       # Unit, security and UI layout tests (headless), as before every release.
@@ -115,6 +131,8 @@ jobs:
           chmod +x tools/*.AppImage
 
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          # libqpdf is bundled from the qpdf built above.
+          export LD_LIBRARY_PATH="$PWD/third_party/qpdf/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export PATH="$PWD/tools:$PATH"
           # X11 (also used under Wayland via XWayland), plus the headless
           # platform for the install check.
@@ -185,9 +203,10 @@ jobs:
           Description: Fast, private viewer for PDF, PostScript, images, RTF and ODT
            XPreview+ opens PDF documents, PostScript and EPS, images (PNG, JPEG,
            GIF, WebP, TIFF, BMP, SVG), RTF and OpenDocument text, and exports
-           anything it opens to PDF. It fills in PDF forms and edits PDF pages:
-           reorder, rotate, delete, insert and combine. It never connects to the
-           internet. PostScript and EPS need Ghostscript.
+           anything it opens to PDF. It annotates PDFs, fills in PDF forms,
+           password protects PDFs and edits PDF pages: reorder, rotate, delete,
+           insert and combine. It never connects to the internet. PostScript and
+           EPS need Ghostscript.
           EOF
 
           mkdir -p release
@@ -246,7 +265,7 @@ jobs:
 
   release:
     needs: [build, install-check]
-    if: inputs.tag != ''
+    if: (inputs.tag || github.event.release.tag_name) != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -256,6 +275,6 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
           DEB: ${{ needs.build.outputs.deb }}
         run: gh release upload "$TAG" "$DEB" "$DEB.sha256" --clobber --repo "${{ github.repository }}"

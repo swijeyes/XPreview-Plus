@@ -15,6 +15,7 @@ public:
     explicit InfoBar(QWidget *parent = nullptr);
     void setMessage(const QString &text);
     void addAction(const QString &label, std::function<void()> fn);
+    void clearActions();
 
 private:
     QLabel *m_label;

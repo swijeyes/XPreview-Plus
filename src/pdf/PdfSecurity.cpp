@@ -7,6 +7,7 @@
 #include <qpdf/Buffer.hh>
 #include <qpdf/Constants.h>
 #include <qpdf/QPDF.hh>
+#include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFWriter.hh>
 
 #include <exception>
@@ -78,9 +79,41 @@ QByteArray encryptLike(const QByteArray &plain, const QByteArray &original, cons
     return {};
 }
 
+Decrypted decrypt(const QByteArray &encrypted, const QByteArray &password)
+{
+    Decrypted out;
+    try {
+        QPDF pdf;
+        load(pdf, "document.pdf", encrypted, password);
+        int R = 0, P = 0, V = 0;
+        QPDF::encryption_method_e stream, string, file;
+        if (!pdf.isEncrypted(R, P, V, stream, string, file)) {
+            out.result = Decrypted::Result::Unsupported;  // not encrypted: nothing for qpdf to fix
+            return out;
+        }
+        out.revision = R;
+        out.permissions = pdf.ownerPasswordMatched() ? 0xffffffff : static_cast<unsigned long>(static_cast<unsigned>(P));
+        QPDFWriter w(pdf);
+        w.setOutputMemory();
+        w.setPreserveEncryption(false);
+        out.pdf = written(w);
+        out.result = out.pdf.isEmpty() ? Decrypted::Result::Failed : Decrypted::Result::Ok;
+    } catch (const QPDFExc &e) {
+        out.result = e.getErrorCode() == qpdf_e_password ? Decrypted::Result::Password : Decrypted::Result::Failed;
+        // qpdf reports unknown security handlers (certificates, DRM) as unsupported.
+        if (out.result == Decrypted::Result::Failed && e.getErrorCode() == qpdf_e_unsupported)
+            out.result = Decrypted::Result::Unsupported;
+    } catch (...) {
+        out.result = Decrypted::Result::Failed;
+    }
+    return out;
+}
+
 #else
 
 bool available() { return false; }
+
+Decrypted decrypt(const QByteArray &, const QByteArray &) { return {}; }
 
 QByteArray encrypt(const QByteArray &, const QByteArray &, const QByteArray &, const Permissions &, QString *error)
 {

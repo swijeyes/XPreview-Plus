@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <QColor>
 #include <QList>
 #include <QMainWindow>
 
@@ -70,6 +71,11 @@ private:
     void updateTabBarStyle();
     void updateSearchStyle();
     void saveWindowGeometry();
+    // Annotation tool (DocumentView::Tool) for every tab of this window.
+    void setAnnotationTool(int tool);
+    // Colours and text size of new annotations, for every tab.
+    void applyAnnotationStyle();
+    QMenu *colourMenu(const QString &title, const QList<std::pair<QString, QColor>> &colours, QColor *target);
 
     static QList<MainWindow *> s_windows;  // all open windows, newest last
 
@@ -87,7 +93,16 @@ private:
     QTimer *m_geometryTimer;
 
     QAction *m_open, *m_close, *m_save, *m_saveAs, *m_export, *m_print, *m_openDefault, *m_reveal;
-    QAction *m_protect;
+    QAction *m_protect, *m_unlock;
+    QActionGroup *m_toolGroup;
+    QList<QAction *> m_toolActions;  // indexed by DocumentView::Tool
+    QAction *m_editAnnotation, *m_deleteAnnotation;
+    QMenu *m_annotateStyleMenus[3] = {};  // highlight colour, pen colour, text size
+    QToolButton *m_markupButton = nullptr;
+    int m_tool = 0;      // DocumentView::Tool::Select
+    int m_lastTool = 1;  // the markup button's tool: Highlight until another is used
+    QColor m_markupColor, m_penColor;
+    double m_textSize = 12;
     QAction *m_undo, *m_redo, *m_insertFile, *m_insertBlank, *m_deletePages;
     QAction *m_rotPageLeft, *m_rotPageRight, *m_exportPages;
     QAction *m_copy, *m_find, *m_findNext, *m_findPrev;

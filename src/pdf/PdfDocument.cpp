@@ -3,6 +3,7 @@
 
 #include "PdfDocument.h"
 
+#include "core/FontSubstitution.h"
 #include "core/Limits.h"
 #include "core/SafeImage.h"
 #include "PdfSecurity.h"
@@ -23,6 +24,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QLineF>
 #include <QMutex>
 #include <QSaveFile>
 #include <QTimer>
@@ -68,6 +70,35 @@ QString metaText(FPDF_DOCUMENT doc, const char *tag)
     FPDF_GetMetaText(doc, tag, buf.data(), bytes);
     return fromUtf16Buffer(buf);
 }
+
+QString annotString(FPDF_ANNOTATION a, const char *key)
+{
+    const unsigned long bytes = FPDFAnnot_GetStringValue(a, key, nullptr, 0);
+    if (bytes <= 2 || bytes > 4 * 1024 * 1024) return {};
+    QVector<unsigned short> buf(bytes / 2 + 1);
+    FPDFAnnot_GetStringValue(a, key, buf.data(), bytes);
+    return fromUtf16Buffer(buf);
+}
+
+void setAnnotString(FPDF_ANNOTATION a, const char *key, const QString &value)
+{
+    const QVector<unsigned short> buf = toUtf16Buffer(value);
+    FPDFAnnot_SetStringValue(a, key, buf.constData());
+}
+
+// Colour, print flag and modification date every new annotation gets.
+void initAnnot(FPDF_ANNOTATION a, const QColor &color, int flags = FPDF_ANNOT_FLAG_PRINT)
+{
+    FPDFAnnot_SetColor(a, FPDFANNOT_COLORTYPE_Color, color.red(), color.green(), color.blue(), color.alpha());
+    FPDFAnnot_SetFlags(a, flags);
+    setAnnotString(a, "M", QDateTime::currentDateTimeUtc().toString(QStringLiteral("'D:'yyyyMMddHHmmss'Z'")));
+}
+
+// Text boxes are stamps whose appearance XPreview+ draws (PDFium's own free
+// text appearance cannot wrap lines). This subject marks them; their font
+// size and colour are kept in /DA so they can be edited again.
+const QString kTextBoxSubject = QStringLiteral("Text Box");
+constexpr int kMaxAnnotationText = 20000;  // characters
 
 struct FileWriter : FPDF_FILEWRITE {
     QIODevice *file;
@@ -238,6 +269,10 @@ std::shared_ptr<PdfDocument> PdfDocument::open(const QString &path, const QByteA
         case FPDF_ERR_SECURITY: *error = LoadError::Security; break;
         default: *error = LoadError::Unknown; break;
         }
+        if (*error == LoadError::Password || *error == LoadError::Security || *error == LoadError::Format) {
+            std::shared_ptr<PdfDocument> d(new PdfDocument);
+            if (d->loadDecrypted(path, password, error)) return d;
+        }
         return nullptr;
     }
     std::shared_ptr<PdfDocument> d(new PdfDocument);
@@ -256,6 +291,70 @@ std::shared_ptr<PdfDocument> PdfDocument::open(const QString &path, const QByteA
     d->initForm();
     *error = LoadError::None;
     return d;
+}
+
+bool PdfDocument::loadDecrypted(const QString &path, const QByteArray &password, LoadError *error)
+{
+    if (!PdfSecurity::available()) return false;
+    QFile f(path);
+    if (f.size() > Limits::kMaxInsertPdfBytes || !f.open(QIODevice::ReadOnly)) return false;
+    const QByteArray original = f.readAll();
+    // A damaged unencrypted file stays PDFium's verdict.
+    if (*error == LoadError::Format && !original.contains("/Encrypt")) return false;
+    const PdfSecurity::Decrypted plain = PdfSecurity::decrypt(original, password);
+    switch (plain.result) {
+    case PdfSecurity::Decrypted::Result::Ok: break;
+    case PdfSecurity::Decrypted::Result::Password: *error = LoadError::Password; return false;
+    case PdfSecurity::Decrypted::Result::Unsupported:
+        if (*error != LoadError::Format) *error = LoadError::Security;
+        return false;
+    case PdfSecurity::Decrypted::Result::Failed: return false;
+    }
+    m_memory = plain.pdf;  // PDFium reads from this buffer for the document's lifetime
+    m_doc = FPDF_LoadMemDocument64(m_memory.constData(), size_t(m_memory.size()), nullptr);
+    if (!m_doc) return false;
+    m_decryptedCopy = true;
+    m_password = password;
+    setFilePath(path);
+    m_securityRevision = plain.revision;
+    m_permissions = plain.permissions;
+    m_protection.mode = Protection::Mode::Original;
+    m_encryptedOriginal = original;
+    readPageSizes();
+    initForm();
+    *error = LoadError::None;
+    return true;
+}
+
+bool PdfDocument::unlock(const QByteArray &ownerPassword)
+{
+    std::lock_guard lock(pdfiumLock());
+    if (!isEncrypted() || !isRestricted() || ownerPassword.isEmpty()) return false;
+    // The password must open the original file with every permission.
+    bool owner = false;
+    if (m_decryptedCopy) {
+        const PdfSecurity::Decrypted check = PdfSecurity::decrypt(m_encryptedOriginal, ownerPassword);
+        owner = check.result == PdfSecurity::Decrypted::Result::Ok && check.permissions == 0xffffffff;
+    } else {
+        FPDF_DOCUMENT check =
+            m_encryptedOriginal.isEmpty()
+                ? FPDF_LoadDocument(QFile::encodeName(filePath()).constData(), ownerPassword.constData())
+                : FPDF_LoadMemDocument64(m_encryptedOriginal.constData(), size_t(m_encryptedOriginal.size()),
+                                         ownerPassword.constData());
+        if (check) {
+            owner = (FPDF_GetDocPermissions(check) | 0x3) == 0xffffffff;  // bits 1-2 are reserved (0)
+            FPDF_CloseDocument(check);
+        }
+    }
+    if (!owner) return false;
+    // Continue from a decrypted copy of the current content (edits kept), so
+    // PDFium itself no longer applies the restrictions either.
+    const QByteArray plain = plainBytes(nullptr);
+    if (plain.isEmpty() || !loadFromMemory(plain, false)) return false;
+    m_password.fill('\0');
+    m_password = ownerPassword;
+    m_permissions = 0xffffffff;
+    return true;
 }
 
 std::shared_ptr<PdfDocument> PdfDocument::openConverted(const QByteArray &pdf, const QString &path,
@@ -696,7 +795,7 @@ QMap<QString, QString> PdfDocument::metadata()
         QStringList limits;
         if (!canPrint()) limits << QStringLiteral("printing");
         if (!canCopy()) limits << QStringLiteral("copying");
-        if (!canEditPages() || !canFillForms()) limits << QStringLiteral("changes");
+        if (!canEditPages() || !canFillForms() || !canAnnotate()) limits << QStringLiteral("changes");
         m.insert(QStringLiteral("Security"),
                  QStringLiteral("Encrypted (%1)").arg(encryptionDescription()) +
                      (limits.isEmpty() ? QString() : QStringLiteral("; restricts %1").arg(limits.join(QStringLiteral(", ")))));
@@ -945,7 +1044,7 @@ bool PdfDocument::snapshot(const QString &label, Snapshot *out)
     return true;
 }
 
-void PdfDocument::finishEdit(Snapshot &&before)
+void PdfDocument::finishEdit(Snapshot &&before, bool structural)
 {
     m_undo.append(std::move(before));
     qsizetype total = 0;
@@ -956,8 +1055,12 @@ void PdfDocument::finishEdit(Snapshot &&before)
     }
     m_redo.clear();
     releasePages();
-    readPageSizes();
-    ++m_revision;
+    if (structural) {
+        readPageSizes();
+        ++m_revision;
+    } else {
+        ++m_annotRevision;
+    }
     contentChanged();
 }
 
@@ -1195,4 +1298,377 @@ bool PdfDocument::save(const QString &path, QString *error)
     m_savedState = m_state;
     setState(m_state);
     return true;
+}
+
+// --- Annotations -------------------------------------------------------------
+
+bool PdfDocument::editAnnotations(const QString &label, int index, const std::function<bool(FPDF_PAGE)> &change)
+{
+    if (!canAnnotate() || index < 0 || index >= pageCount()) return false;
+    std::lock_guard lock(pdfiumLock());
+    Snapshot before;
+    if (!snapshot(label, &before)) return false;
+    FPDF_PAGE p = page(index);
+    if (!p || !change(p)) {
+        // Nothing (or only part) was changed: return to the snapshot.
+        loadFromMemory(before.data, false);
+        return false;
+    }
+    // PDFium draws missing annotation appearances when it renders a page and
+    // keeps them in the document; render once so saved files carry them.
+    if (FPDF_BITMAP bmp = FPDFBitmap_Create(1, 1, 0)) {
+        FPDF_RenderPageBitmap(bmp, p, 0, 0, 1, 1, 0, FPDF_ANNOT);
+        FPDFBitmap_Destroy(bmp);
+    }
+    finishEdit(std::move(before), false);
+    return true;
+}
+
+bool PdfDocument::addMarkup(Markup type, const QVector<PageRect> &boxes, const QColor &color)
+{
+    if (boxes.isEmpty()) return false;
+    const int index = boxes.first().page;
+    static const char *const labels[] = {"Highlight", "Underline", "Strike Through"};
+    const int subtype = type == Markup::Highlight   ? FPDF_ANNOT_HIGHLIGHT
+                        : type == Markup::Underline ? FPDF_ANNOT_UNDERLINE
+                                                    : FPDF_ANNOT_STRIKEOUT;
+    return editAnnotations(QString::fromLatin1(labels[int(type)]), index, [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_CreateAnnot(p, subtype);
+        if (!a) return false;
+        QRectF bounds;
+        for (const PageRect &box : boxes) {
+            if (box.page != index || box.rect.isEmpty()) continue;
+            // Quad points: upper left, upper right, lower left, lower right
+            // as the text reads (pageToPdf() follows the page's rotation).
+            const QPointF ul = pageToPdf(index, box.rect.topLeft()), ur = pageToPdf(index, box.rect.topRight());
+            const QPointF ll = pageToPdf(index, box.rect.bottomLeft()), lr = pageToPdf(index, box.rect.bottomRight());
+            const FS_QUADPOINTSF q{float(ul.x()), float(ul.y()), float(ur.x()), float(ur.y()),
+                                   float(ll.x()), float(ll.y()), float(lr.x()), float(lr.y())};
+            FPDFAnnot_AppendAttachmentPoints(a, &q);
+            bounds |= QPolygonF({ul, ur, ll, lr}).boundingRect();
+        }
+        const FS_RECTF r{float(bounds.left()), float(bounds.bottom()), float(bounds.right()), float(bounds.top())};
+        const bool ok = !bounds.isEmpty() && FPDFAnnot_SetRect(a, &r);
+        initAnnot(a, color);
+        FPDFPage_CloseAnnot(a);
+        return ok;
+    });
+}
+
+bool PdfDocument::addNote(int index, QPointF at, const QString &text, const QColor &color)
+{
+    return editAnnotations(QStringLiteral("Add Note"), index, [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_CreateAnnot(p, FPDF_ANNOT_TEXT);
+        if (!a) return false;
+        // The note icon, 20 points square, with its top left corner at `at`.
+        const QRectF icon = QPolygonF({pageToPdf(index, at), pageToPdf(index, at + QPointF(20, 20))}).boundingRect();
+        const FS_RECTF r{float(icon.left()), float(icon.bottom()), float(icon.right()), float(icon.top())};
+        FPDFAnnot_SetRect(a, &r);
+        initAnnot(a, color, FPDF_ANNOT_FLAG_PRINT | FPDF_ANNOT_FLAG_NOZOOM | FPDF_ANNOT_FLAG_NOROTATE);
+        setAnnotString(a, "Contents", text.left(kMaxAnnotationText));
+        FPDFPage_CloseAnnot(a);
+        return true;
+    });
+}
+
+bool PdfDocument::addInk(int index, const QVector<QPolygonF> &strokes, const QColor &color, double width)
+{
+    return editAnnotations(QStringLiteral("Drawing"), index, [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_CreateAnnot(p, FPDF_ANNOT_INK);
+        if (!a) return false;
+        QRectF bounds;
+        bool any = false;
+        for (const QPolygonF &stroke : strokes) {
+            QVector<FS_POINTF> points;
+            for (const QPointF &pt : stroke.mid(0, 10000)) {
+                const QPointF pdf = pageToPdf(index, pt);
+                points << FS_POINTF{float(pdf.x()), float(pdf.y())};
+                bounds |= QRectF(pdf, QSizeF(0.01, 0.01));
+            }
+            if (points.size() == 1) points << points.first();  // a dot
+            any = (!points.isEmpty() && FPDFAnnot_AddInkStroke(a, points.constData(), points.size()) >= 0) || any;
+        }
+        bounds.adjust(-width, -width, width, width);
+        const FS_RECTF r{float(bounds.left()), float(bounds.bottom()), float(bounds.right()), float(bounds.top())};
+        FPDFAnnot_SetRect(a, &r);
+        FPDFAnnot_SetBorder(a, 0, 0, float(width));
+        initAnnot(a, color);
+        FPDFPage_CloseAnnot(a);
+        return any;
+    });
+}
+
+bool PdfDocument::addShape(Shape shape, int index, const QRectF &rect, const QColor &color, double width)
+{
+    if (rect.width() < 1 || rect.height() < 1) return false;
+    return editAnnotations(shape == Shape::Rectangle ? QStringLiteral("Rectangle") : QStringLiteral("Oval"), index,
+                           [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_CreateAnnot(p, shape == Shape::Rectangle ? FPDF_ANNOT_SQUARE : FPDF_ANNOT_CIRCLE);
+        if (!a) return false;
+        const QRectF box = QPolygonF({pageToPdf(index, rect.topLeft()), pageToPdf(index, rect.bottomRight())}).boundingRect();
+        const FS_RECTF r{float(box.left()), float(box.bottom()), float(box.right()), float(box.top())};
+        FPDFAnnot_SetRect(a, &r);
+        FPDFAnnot_SetBorder(a, 0, 0, float(width));
+        initAnnot(a, color);
+        FPDFPage_CloseAnnot(a);
+        return true;
+    });
+}
+
+namespace {
+
+// Text with characters outside Latin-1 needs a font that has them: the
+// bundled Arimo (metrically Helvetica) is embedded then; otherwise the
+// standard Helvetica keeps the file small.
+FPDF_FONT loadTextBoxFont(FPDF_DOCUMENT doc, const QString &text)
+{
+    const bool latin1 = std::all_of(text.cbegin(), text.cend(), [](QChar c) {
+        return c.unicode() == '\n' || (c.unicode() >= 0x20 && c.unicode() < 0x7f) || (c.unicode() >= 0xa0 && c.unicode() <= 0xff);
+    });
+    if (!latin1) {
+        QFile f(FontSubstitution::bundledFontFile(QStringLiteral("Arimo-Regular.ttf")));
+        if (f.open(QIODevice::ReadOnly)) {
+            const QByteArray data = f.readAll();
+            if (FPDF_FONT font = FPDFText_LoadFont(doc, reinterpret_cast<const uint8_t *>(data.constData()),
+                                                   uint32_t(data.size()), FPDF_FONT_TRUETYPE, true))
+                return font;
+        }
+    }
+    return FPDFText_LoadStandardFont(doc, "Helvetica");
+}
+
+// Text widths as the sum of character widths, each measured once by PDFium
+// (text objects are laid out without kerning), so wrapping stays linear.
+class TextMeasure {
+public:
+    TextMeasure(FPDF_DOCUMENT doc, FPDF_FONT font, double size) : m_doc(doc), m_font(font), m_size(size) {}
+    double width(QChar c)
+    {
+        auto it = m_widths.constFind(c);
+        if (it != m_widths.cend()) return *it;
+        double w = 0;
+        if (FPDF_PAGEOBJECT t = FPDFPageObj_CreateTextObj(m_doc, m_font, float(m_size))) {
+            // Measured between two dots: a lone space has no bounds.
+            const QVector<unsigned short> buf = toUtf16Buffer(QStringLiteral(".") + c + QStringLiteral("."));
+            const QVector<unsigned short> dots = toUtf16Buffer(QStringLiteral(".."));
+            float l = 0, b = 0, r = 0, top = 0, l2 = 0, r2 = 0;
+            FPDFText_SetText(t, buf.constData());
+            const bool ok = FPDFPageObj_GetBounds(t, &l, &b, &r, &top);
+            FPDFText_SetText(t, dots.constData());
+            if (ok && FPDFPageObj_GetBounds(t, &l2, &b, &r2, &top)) w = qMax(0.0, double((r - l) - (r2 - l2)));
+            FPDFPageObj_Destroy(t);
+        }
+        m_widths.insert(c, w);
+        return w;
+    }
+    double width(const QString &s)
+    {
+        double w = 0;
+        for (QChar c : s) w += width(c);
+        return w;
+    }
+
+private:
+    FPDF_DOCUMENT m_doc;
+    FPDF_FONT m_font;
+    double m_size;
+    QHash<QChar, double> m_widths;
+};
+
+// Greedy word wrap to `width` points; words longer than a line are split.
+QStringList wrapText(TextMeasure &measure, const QString &text, double width)
+{
+    QStringList lines;
+    const double space = measure.width(QLatin1Char(' '));
+    for (const QString &para : text.split(QLatin1Char('\n'))) {
+        QString line;
+        double lineWidth = 0;
+        for (const QString &word : para.split(QLatin1Char(' '))) {
+            const double w = measure.width(word);
+            if (line.isEmpty() && lineWidth == 0 && w <= width) {
+                line = word;
+                lineWidth = w;
+                continue;
+            }
+            if (lineWidth + space + w <= width) {
+                line += QLatin1Char(' ') + word;
+                lineWidth += space + w;
+                continue;
+            }
+            if (!line.isEmpty() || lineWidth > 0) lines << line;
+            line.clear();
+            lineWidth = 0;
+            for (QChar c : word) {  // split what does not fit on a line
+                const double cw = measure.width(c);
+                if (!line.isEmpty() && lineWidth + cw > width) {
+                    lines << line;
+                    line.clear();
+                    lineWidth = 0;
+                }
+                line += c;
+                lineWidth += cw;
+            }
+        }
+        lines << line;
+    }
+    return lines;
+}
+
+}  // namespace
+
+bool PdfDocument::addTextBox(int index, const QRectF &rect, const QString &text, const QColor &color, double fontSize)
+{
+    if (text.trimmed().isEmpty()) return false;
+    return editAnnotations(QStringLiteral("Text Box"), index, [&](FPDF_PAGE p) {
+        return createTextBox(p, index, rect, text, color, fontSize);
+    });
+}
+
+bool PdfDocument::createTextBox(FPDF_PAGE p, int index, QRectF rect, QString text, const QColor &color, double fontSize)
+{
+    text = text.left(kMaxAnnotationText);
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")).replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    text.replace(QLatin1Char('\t'), QLatin1Char(' '));
+    fontSize = qBound(4.0, fontSize, 144.0);
+    FPDF_FONT font = loadTextBoxFont(m_doc, text);
+    if (!font) return false;
+    const double pad = 4, lineHeight = fontSize * 1.2;
+    // On the page, and at least wide enough for a character or two.
+    const QSizeF pageSize = m_pageSizes[index];
+    rect.setWidth(qMin(qMax(rect.width(), fontSize * 2 + 2 * pad), pageSize.width()));
+    rect.moveLeft(qBound(0.0, rect.left(), pageSize.width() - rect.width()));
+    rect.moveTop(qBound(0.0, rect.top(), qMax(0.0, pageSize.height() - rect.height())));
+    TextMeasure measure(m_doc, font, fontSize);
+    const QStringList lines = wrapText(measure, text, rect.width() - 2 * pad);
+    rect.setHeight(qMax(rect.height(), lines.size() * lineHeight + 2 * pad));
+    // Box space (points, y up from the box's lower left corner, as the text
+    // reads) to PDF space, which also turns the text with the page.
+    const QPointF o = pageToPdf(index, rect.bottomLeft());
+    const QPointF x = pageToPdf(index, rect.bottomRight()) - o, y = pageToPdf(index, rect.topLeft()) - o;
+    const double w = rect.width(), h = rect.height();
+    FPDF_ANNOTATION a = FPDFPage_CreateAnnot(p, FPDF_ANNOT_STAMP);
+    bool ok = a;
+    if (a) {
+        // The rectangle first: the appearance stream is sized from it.
+        const QRectF box = QPolygonF({o, o + x, o + y, o + x + y}).boundingRect();
+        const FS_RECTF r{float(box.left()), float(box.bottom()), float(box.right()), float(box.top())};
+        FPDFAnnot_SetRect(a, &r);
+    }
+    for (int i = 0; ok && i < lines.size(); ++i) {
+        if (lines[i].trimmed().isEmpty()) continue;
+        FPDF_PAGEOBJECT t = FPDFPageObj_CreateTextObj(m_doc, font, float(fontSize));
+        if (!t) {
+            ok = false;
+            break;
+        }
+        const QVector<unsigned short> buf = toUtf16Buffer(lines[i]);
+        FPDFText_SetText(t, buf.constData());
+        FPDFPageObj_SetFillColor(t, color.red(), color.green(), color.blue(), color.alpha());
+        FPDFPageObj_Transform(t, 1, 0, 0, 1, pad, h - pad - fontSize * 0.9 - i * lineHeight);
+        FPDFPageObj_Transform(t, x.x() / w, x.y() / w, y.x() / h, y.y() / h, o.x(), o.y());
+        ok = FPDFAnnot_AppendObject(a, t);
+        if (!ok) FPDFPageObj_Destroy(t);
+    }
+    FPDFFont_Close(font);
+    if (a) {
+        initAnnot(a, color);
+        setAnnotString(a, "Contents", text);
+        setAnnotString(a, "Subj", kTextBoxSubject);
+        setAnnotString(a, "DA", QStringLiteral("/Helv %1 Tf %2 %3 %4 rg")
+                                    .arg(fontSize)
+                                    .arg(color.redF(), 0, 'f', 3)
+                                    .arg(color.greenF(), 0, 'f', 3)
+                                    .arg(color.blueF(), 0, 'f', 3));
+        FPDFPage_CloseAnnot(a);
+    }
+    return ok;
+}
+
+QVector<PdfDocument::Annotation> PdfDocument::annotations(int index)
+{
+    QVector<Annotation> out;
+    std::lock_guard lock(pdfiumLock());
+    FPDF_PAGE p = page(index);
+    if (!p) return out;
+    const int n = qMin(FPDFPage_GetAnnotCount(p), 10000);
+    for (int i = 0; i < n; ++i) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(p, i);
+        if (!a) continue;
+        const int subtype = FPDFAnnot_GetSubtype(a);
+        FS_RECTF r{};
+        if (subtype != FPDF_ANNOT_WIDGET && subtype != FPDF_ANNOT_LINK && subtype != FPDF_ANNOT_POPUP &&
+            !(FPDFAnnot_GetFlags(a) & (FPDF_ANNOT_FLAG_HIDDEN | FPDF_ANNOT_FLAG_INVISIBLE)) && FPDFAnnot_GetRect(a, &r)) {
+            Annotation info;
+            info.page = index;
+            info.index = i;
+            info.subtype = subtype;
+            info.rect = charBoxToPage(index, r.left, r.top, r.right, r.bottom);
+            info.contents = annotString(a, "Contents");
+            info.isNote = subtype == FPDF_ANNOT_TEXT;
+            info.isTextBox = subtype == FPDF_ANNOT_STAMP && annotString(a, "Subj") == kTextBoxSubject;
+            info.isLocked = FPDFAnnot_GetFlags(a) & (FPDF_ANNOT_FLAG_LOCKED | FPDF_ANNOT_FLAG_READONLY);
+            out << info;
+        }
+        FPDFPage_CloseAnnot(a);
+    }
+    return out;
+}
+
+PdfDocument::Annotation PdfDocument::annotationAt(int index, QPointF pt)
+{
+    const QVector<Annotation> all = annotations(index);
+    for (auto it = all.crbegin(); it != all.crend(); ++it)
+        if (it->rect.adjusted(-2, -2, 2, 2).contains(pt)) return *it;
+    return {};
+}
+
+bool PdfDocument::removeAnnotation(const Annotation &annotation)
+{
+    if (annotation.isLocked) return false;
+    return editAnnotations(QStringLiteral("Delete Annotation"), annotation.page, [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(p, annotation.index);
+        if (!a) return false;
+        const bool same = FPDFAnnot_GetSubtype(a) == annotation.subtype;
+        // Its pop-up window (from other apps) goes with it.
+        int popup = -1;
+        if (FPDF_ANNOTATION link = FPDFAnnot_GetLinkedAnnot(a, "Popup")) {
+            popup = FPDFPage_GetAnnotIndex(p, link);
+            FPDFPage_CloseAnnot(link);
+        }
+        FPDFPage_CloseAnnot(a);
+        if (!same) return false;
+        if (popup > annotation.index) FPDFPage_RemoveAnnot(p, popup);
+        const bool ok = FPDFPage_RemoveAnnot(p, annotation.index);
+        if (popup >= 0 && popup < annotation.index) FPDFPage_RemoveAnnot(p, popup);
+        return ok;
+    });
+}
+
+bool PdfDocument::setAnnotationText(const Annotation &annotation, const QString &text)
+{
+    if ((!annotation.isNote && !annotation.isTextBox) || annotation.isLocked) return false;
+    if (annotation.isTextBox && text.trimmed().isEmpty()) return removeAnnotation(annotation);
+    return editAnnotations(annotation.isNote ? QStringLiteral("Edit Note") : QStringLiteral("Edit Text Box"),
+                           annotation.page, [&](FPDF_PAGE p) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(p, annotation.index);
+        if (!a) return false;
+        const bool same = FPDFAnnot_GetSubtype(a) == annotation.subtype;
+        if (!same || annotation.isNote) {
+            if (same) setAnnotString(a, "Contents", text.left(kMaxAnnotationText));
+            FPDFPage_CloseAnnot(a);
+            return same;
+        }
+        // A text box is drawn again with the new text, keeping its place,
+        // font size and colour.
+        double size = 12;
+        QColor color(Qt::black);
+        const QStringList da = annotString(a, "DA").split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (const int tf = da.indexOf(QStringLiteral("Tf")); tf >= 1) size = da[tf - 1].toDouble();
+        if (const int rg = da.indexOf(QStringLiteral("rg")); rg >= 3)
+            color = QColor::fromRgbF(da[rg - 3].toFloat(), da[rg - 2].toFloat(), da[rg - 1].toFloat());
+        FPDFPage_CloseAnnot(a);
+        if (!FPDFPage_RemoveAnnot(p, annotation.index)) return false;
+        return createTextBox(p, annotation.page, QRectF(annotation.rect.topLeft(), QSizeF(annotation.rect.width(), 0)),
+                             text, color, size);
+    });
 }

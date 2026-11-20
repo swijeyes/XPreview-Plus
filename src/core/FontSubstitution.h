@@ -13,6 +13,9 @@ namespace FontSubstitution {
 // bundle's Resources). Call once at startup, from the GUI thread.
 void loadBundledFonts();
 
+// Path of a bundled font file (such as "Arimo-Regular.ttf"), or empty.
+QString bundledFontFile(const QString &fileName);
+
 // Maps a requested family to one that is available, recording any
 // substitution in the report. Thread-safe.
 QString resolve(const QString &family, FidelityReport *report);

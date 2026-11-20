@@ -21,8 +21,9 @@
 ## Features
 
 - **Opens:**
-  - **PDF** (via PDFium), including encrypted files (RC4 and AES-256) and
-    owner restrictions, which are honoured
+  - **PDF** (via PDFium), including encrypted files (RC4 and AES-256, and files
+    with damaged encryption data, through qpdf) and owner restrictions, which
+    are honoured until the owner password unlocks them
   - **PostScript and EPS**, converted to PDF by Ghostscript in a sandboxed helper process
   - **PNG, JPEG, GIF, WebP, TIFF** (multi-page), **BMP, HEIC** and **SVG**
   - **RTF**
@@ -31,6 +32,10 @@
   Formats are detected from file content, not the extension.
 - **Sidebar:** page **thumbnails**, or a **table of contents** (PDF bookmarks, or
   the headings of an RTF/ODT document).
+- **Annotate PDFs:** highlight, underline and strike through text; add notes,
+  freehand drawings, rectangles, ovals and text boxes; select, edit and delete
+  annotations, with undo. Annotations are standard PDF annotations with saved
+  appearances, so other PDF readers show them.
 - **Fill in PDF forms:** text fields, check boxes, radio buttons and lists, with
   copy/paste and undo inside fields. Values are saved into the PDF.
 - **Edit PDF pages** right in the thumbnail sidebar:
@@ -41,8 +46,9 @@
   - undo/redo, and **Save** / **Save As** (⌘S / ⇧⌘S), with a prompt for unsaved
     changes
 - **Password protection:** save PDFs with an open password and/or
-  print/copy/change restrictions (AES-256, via qpdf). Protected PDFs keep their
-  protection when edited and saved.
+  print/copy/change restrictions (AES-256, via qpdf), from **File → Password
+  Protection…** or the **Protect with password** check box in the Save As
+  dialog. Protected PDFs keep their protection when edited and saved.
 - **Export as PDF** works for every format:
   - PDFs are copied byte-for-byte, or re-saved losslessly if rotated or edited.
   - Everything else becomes real vector pages with selectable, searchable text.
@@ -84,6 +90,9 @@ Get the latest build from **[Releases](https://github.com/swijeyes/XPreview-Plus
 |---|---|---|
 | macOS (Apple silicon) | `XPreviewPlus-<version>-macos-arm64.dmg` | Open the DMG and drag **XPreview+** to Applications. Builds that aren't notarised need right-click → **Open** the first time. |
 | Windows 10/11 (x64) | `XPreviewPlus-<version>-windows-x64-portable.zip` | Unzip anywhere and run `XPreview+.exe`. Portable: no installer, no registry entries, and settings are kept in `settings\` next to the exe. |
+| Linux (x86_64), any distribution | `XPreviewPlus-<version>-linux-x86_64.AppImage` | `chmod +x` it and run it. Needs glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer). |
+| Debian / Ubuntu (amd64) | `xpreview-plus_<version>-1_amd64.deb` | `sudo apt install ./xpreview-plus_<version>-1_amd64.deb` (Ubuntu 22.04+, Debian 12+). |
+| Fedora / openSUSE (x86_64) | `xpreview-plus-<version>-1.x86_64.rpm` | `sudo dnf install ./xpreview-plus-<version>-1.x86_64.rpm` (or `sudo zypper install` on openSUSE). |
 
 Each file has a `.sha256` checksum next to it.
 
@@ -104,6 +113,7 @@ Each file has a `.sha256` checksum next to it.
 | Insert page from file / blank page | ⌥⌘I / ⇧⌘N | Ctrl+Alt+I / Ctrl+Shift+N |
 | Delete selected pages | Delete (in the sidebar) | Delete (in the sidebar) |
 | Inspector | ⌘I | Ctrl+I |
+| Annotation tools: Select Text, Highlight, Underline, Strike Through, Note, Draw, Rectangle, Oval, Text Box | ⌃⌘1 … ⌃⌘9 | Ctrl+Shift+1 … 9 |
 | Preferences | ⌘, | Edit → Preferences… |
 
 ## Building from source
@@ -148,13 +158,26 @@ natively on Windows with MSVC and the standard CMake flow also works.
 
 ### Linux
 
-The code and CMake are portable, but Linux builds haven't been tested yet.
-
 ```sh
-sudo apt install qt6-base-dev qt6-svg-dev qt6-image-formats-plugins ninja-build cmake
+sudo apt install qt6-base-dev qt6-svg-dev qt6-image-formats-plugins ninja-build cmake \
+  zlib1g-dev libjpeg-dev
 scripts/fetch-deps.sh
-cmake -S . -B build -G Ninja && cmake --build build
+scripts/build-qpdf.sh            # optional: qpdf 12 for writing encrypted PDFs
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$PWD/third_party/qpdf" && cmake --build build
 ```
+
+A system qpdf 11 or newer works too; without qpdf, encrypted PDFs open but
+cannot be saved encrypted.
+
+### Release builds on GitHub
+
+The workflows in `.github/workflows` build the Windows zip, the AppImage, the
+.deb and the .rpm, test them (the Linux packages are installed and started on
+clean Ubuntu, Debian, Fedora and openSUSE systems), and attach them to a
+GitHub Release with their `.sha256` files. They run when a release is
+**published**; each can also be run by hand from the **Actions** tab with a
+release tag. The macOS DMG is built locally with `scripts/package-mac.sh` and
+uploaded to the release by hand.
 
 ### Tests and tools
 
@@ -235,7 +258,7 @@ These are planned and not built yet:
   in RTF (currently placeholders).
 - **Text layout:** footnotes placed on their own page, and text selection that
   continues across pages.
-- **PDF annotations:** highlights, notes and signatures.
+- **PDF annotations:** moving and resizing annotations, and signatures.
 - **Packaging:** App Sandbox, a sandboxed parser process, and a Linux AppImage
   or Flatpak.
 

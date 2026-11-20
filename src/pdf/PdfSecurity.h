@@ -8,7 +8,8 @@
 
 // Writing encrypted PDFs. PDFium reads every standard security handler but
 // cannot encrypt, so this goes through qpdf when the build has it. Inputs are
-// always PDFs this program produced itself (PDFium's own output).
+// always PDFs this program produced itself (PDFium's own output), except for
+// decrypt(), the fallback for encrypted files PDFium refuses.
 namespace PdfSecurity {
 
 // False when built without qpdf: encrypted PDFs then open but cannot be saved.
@@ -29,5 +30,16 @@ QByteArray encrypt(const QByteArray &plain, const QByteArray &userPassword, cons
 // opens: same passwords, permissions and algorithm.
 QByteArray encryptLike(const QByteArray &plain, const QByteArray &original, const QByteArray &password,
                        QString *error);
+
+// An encrypted PDF that PDFium refuses (for example one with a damaged
+// encryption dictionary), decrypted by qpdf.
+struct Decrypted {
+    enum class Result { Ok, Password, Unsupported, Failed };
+    Result result = Result::Failed;
+    QByteArray pdf;              // decrypted, Ok only
+    int revision = -1;           // security handler revision of the original
+    unsigned long permissions = 0xffffffff;  // as FPDF_GetDocPermissions() reports them
+};
+Decrypted decrypt(const QByteArray &encrypted, const QByteArray &password);
 
 }  // namespace PdfSecurity
