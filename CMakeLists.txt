@@ -45,7 +45,15 @@ if(XPREVIEW_SANITIZE)
     add_link_options(-fsanitize=address,undefined)
 endif()
 
+if(CMAKE_CROSSCOMPILING)
+    set(_xpreview_find_root_path_mode_package "${CMAKE_FIND_ROOT_PATH_MODE_PACKAGE}")
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Svg PrintSupport Concurrent Test)
+if(CMAKE_CROSSCOMPILING)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "${_xpreview_find_root_path_mode_package}")
+    unset(_xpreview_find_root_path_mode_package)
+endif()
 # miniz: system package if present, else the vendored single-file release
 # (used by the Windows cross build; see scripts/fetch-windows-deps.sh).
 find_package(miniz CONFIG QUIET)
