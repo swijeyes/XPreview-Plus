@@ -10,6 +10,7 @@
 #include "ui/RenderService.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFileOpenEvent>
 #include <QSettings>
@@ -90,14 +91,32 @@ int main(int argc, char **argv)
     if (shot >= 0 && shot + 1 < args.size()) {
         const QString out = args.takeAt(shot + 1);
         args.removeAt(shot);
-        QTimer::singleShot(3000, w, [w, out] {
+        auto *timer = new QTimer(w);
+        timer->setInterval(100);
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QObject::connect(timer, &QTimer::timeout, w, [w, out, timer, elapsed] {
+            auto *sb = w->findChild<QStatusBar *>();
+            bool loading = false;
+            if (sb)
+                for (auto *label : sb->findChildren<QLabel *>())
+                    if (label->text().startsWith(QStringLiteral("Loading"))) loading = true;
+            if (loading && elapsed.elapsed() < 30000) return;
+
+            timer->stop();
             w->grab().save(out);
             // Echo the status line so smoke tests can assert on it.
-            if (auto *sb = w->findChild<QStatusBar *>())
+            if (sb)
                 for (auto *label : sb->findChildren<QLabel *>())
                     if (!label->text().isEmpty()) fprintf(stdout, "status: %s\n", qPrintable(label->text()));
-            QApplication::quit();
+            if (loading) {
+                fprintf(stderr, "Timed out waiting for document to load.\n");
+                QApplication::exit(1);
+            } else {
+                QApplication::quit();
+            }
         });
+        timer->start();
     }
     for (const QString &arg : std::as_const(args))
         if (!arg.startsWith(QLatin1Char('-'))) {
