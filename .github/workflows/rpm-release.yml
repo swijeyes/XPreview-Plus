@@ -23,7 +23,7 @@ on:
       tag:
         description: Existing release tag to attach the .rpm to (empty = build only)
         required: false
-        default: v3.0
+        default: v3
 
 permissions:
   contents: write
@@ -253,7 +253,7 @@ jobs:
             install: dnf install -y
             remove: dnf remove -y
           - image: opensuse/tumbleweed
-            install: zypper --non-interactive install --allow-unsigned-rpm
+            install: zypper --non-interactive install --allow-unsigned-rpm ghostscript
             remove: zypper --non-interactive remove
     container: ${{ matrix.image }}
     steps:
